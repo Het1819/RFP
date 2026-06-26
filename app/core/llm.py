@@ -126,10 +126,8 @@ RFP Text:
             if start != -1 and end != 0:
                 data = json.loads(content_text[start:end])
                 return [RequirementDraft(**item) for item in data]
-        except Exception:
-            pass
-        fake = FakeLLMProvider()
-        return await fake.extract_requirements(text)
+        except Exception as e:
+            raise e
 
     async def draft_response(
         self, requirement_text: str, evidence_snippets: list[dict[str, Any]]
@@ -192,11 +190,8 @@ Return your answer strictly as a JSON object matching this schema:
                     assumptions=data.get("assumptions"),
                     evidence_links=evidence_snippets,
                 )
-        except Exception:
-            pass
-
-        fake = FakeLLMProvider()
-        return await fake.draft_response(requirement_text, evidence_snippets)
+        except Exception as e:
+            raise e
 
 
 def get_llm_provider() -> LLMProvider:

@@ -19,6 +19,18 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
 
+def get_requirement_for_org(
+    db: Session, requirement_id: uuid.UUID, org_id: uuid.UUID
+) -> Requirement:
+    req = db.get(Requirement, requirement_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    project = db.get(ProposalProject, req.project_id)
+    if not project or project.organization_id != org_id:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    return req
+
+
 @router.get("/projects/{project_id}/matrix", response_class=HTMLResponse)
 def matrix_view(
     request: Request, project_id: uuid.UUID, db: Session = Depends(get_db)
@@ -51,9 +63,8 @@ def matrix_view(
 def edit_requirement_row(
     request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
+    org_id, _ = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
     return templates.TemplateResponse(
         request=request,
         name="projects/matrix_row_edit.html",
@@ -76,11 +87,8 @@ def update_requirement_action(
     risk_level: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-
     org_id, user_id = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
 
     old_details = {
         "original_text": req.original_text,
@@ -127,9 +135,8 @@ def update_requirement_action(
 def cancel_edit_row(
     request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
+    org_id, _ = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
     return templates.TemplateResponse(
         request=request,
         name="projects/matrix_row.html",
@@ -141,11 +148,8 @@ def cancel_edit_row(
 def delete_requirement_action(
     requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-
     org_id, user_id = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
     db.delete(req)
     db.commit()
 
@@ -212,11 +216,8 @@ def split_requirement_action(
     split_text: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-
     org_id, user_id = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
 
     secondary = Requirement(
         project_id=req.project_id,
@@ -254,10 +255,8 @@ def split_requirement_action(
 def requirement_workspace_view(
     request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-
+    org_id, _ = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
     project = db.get(ProposalProject, req.project_id)
 
     # Run retrieval
@@ -307,11 +306,8 @@ def link_evidence_action(
     score: float = Form(0.0),
     db: Session = Depends(get_db),
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-
     org_id, user_id = get_default_org_and_user(db)
+    _ = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.evidence import EvidenceLink
 
@@ -348,11 +344,8 @@ async def draft_requirement_response(
     requirement_id: uuid.UUID,
     db: Session = Depends(get_db),
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-
     org_id, user_id = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.evidence import EvidenceLink
 
@@ -432,9 +425,8 @@ def edit_draft_response(
     content: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
+    org_id, user_id = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.response import DraftResponse
 
@@ -473,9 +465,8 @@ def approve_draft_response(
     requirement_id: uuid.UUID,
     db: Session = Depends(get_db),
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
+    org_id, user_id = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.response import DraftResponse
 
@@ -515,9 +506,8 @@ def reject_draft_response(
     requirement_id: uuid.UUID,
     db: Session = Depends(get_db),
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
+    org_id, user_id = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.response import DraftResponse
 
@@ -566,11 +556,8 @@ def assign_requirement_reviewer(
     reviewer_name: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-
     org_id, user_id = get_default_org_and_user(db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
 
     req.owner_name = reviewer_name
     req.status = "NEEDS_REVIEW"

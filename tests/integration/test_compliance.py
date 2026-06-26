@@ -200,3 +200,69 @@ def test_delete_requirement(client, db):
         )
     ).first()
     assert delete_audit is not None
+
+
+def test_cross_tenant_isolation_boundary(client, db, monkeypatch):
+    org_id, user_id = get_default_org_and_user(db)
+
+    # 1. Setup project and requirement for org A
+    project_a = ProposalProject(
+        organization_id=org_id,
+        created_by_id=user_id,
+        name="Org A Bid",
+        client_name="Client A",
+        status="draft",
+    )
+    db.add(project_a)
+    db.commit()
+
+    req_a = Requirement(
+        project_id=project_a.id,
+        original_text="Secret requirement A",
+        status="NOT_STARTED",
+    )
+    db.add(req_a)
+    db.commit()
+
+    # 2. Setup separate organization B (different org ID)
+    import uuid
+
+    org_b_id = uuid.uuid4()
+
+    # We must insert Organization B into database first to pass foreign key constraints
+    from app.models.organization import Organization
+
+    org_b = Organization(id=org_b_id, name="Organization B")
+    db.add(org_b)
+    db.commit()
+
+    # Create project in Org B
+    project_b = ProposalProject(
+        organization_id=org_b_id,
+        created_by_id=user_id,
+        name="Org B Bid",
+        client_name="Client B",
+        status="draft",
+    )
+    db.add(project_b)
+    db.commit()
+
+    # Monkeypatch get_default_org_and_user to return Org B context inside the target routes namespace
+    monkeypatch.setattr(
+        "app.web.routes.compliance.get_default_org_and_user",
+        lambda session: (org_b_id, user_id),
+    )
+
+    # 3. Try to access requirement A (belonging to Org A) under Org B context
+    resp = client.get(f"/requirements/{req_a.id}/workspace")
+    assert resp.status_code == 404
+
+    # Try to post to edit requirement A
+    edit_resp = client.post(
+        f"/requirements/{req_a.id}/edit", data={"original_text": "Hacked"}
+    )
+    assert edit_resp.status_code == 404
+
+    # Try to delete requirement A
+    del_resp = client.delete(f"/requirements/{req_a.id}")
+    assert del_resp.status_code == 404
