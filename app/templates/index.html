@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RFP Architect — Human-in-the-Loop Proposal Engine</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body>
+    <div class="glass-bg"></div>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <span class="logo-icon">📐</span>
+                <span class="logo-text">RFP Architect</span>
+            </div>
+            <nav>
+                <span class="badge">MVP v0.1.0</span>
+            </nav>
+        </header>
+
+        <main>
+            <section class="hero">
+                <h1 class="hero-title">Precision RFP Responses. <span class="gradient-text">Evidence-First.</span></h1>
+                <p class="hero-subtitle">Upload complex documents, extract clean requirements, verify citations, and draft perfect compliant bids—with complete human review control.</p>
+                <div class="cta-group">
+                    <a href="#" class="btn btn-primary">Launch Workspace</a>
+                    <a href="https://github.com" target="_blank" class="btn btn-secondary">Documentation</a>
+                </div>
+            </section>
+
+            <section class="features">
+                <div class="feature-card">
+                    <div class="feature-icon">📁</div>
+                    <h3>Multi-Tenant Storage</h3>
+                    <p>Clean Organization-level data boundary isolation. Secure handling of untrusted RFP artifacts.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">🔍</div>
+                    <h3>Evidence Before Drafting</h3>
+                    <p>No LLM hallucination. Generates draft answers ONLY when backed by explicit, page-referenced document evidence.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">👁️</div>
+                    <h3>Human-in-the-Loop</h3>
+                    <p>Complete control to override, edit, or approve all responses before final compilation export.</p>
+                </div>
+            </section>
+        </main>
+
+        <footer>
+            <p>&copy; 2026 RFP Architect. Built with FastAPI, Jinja2, HTMX, and PostgreSQL.</p>
+        </footer>
+    </div>
+</body>
+</html>
