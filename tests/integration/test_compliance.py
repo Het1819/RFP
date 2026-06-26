@@ -247,7 +247,8 @@ def test_cross_tenant_isolation_boundary(client, db, monkeypatch):
     db.add(project_b)
     db.commit()
 
-    # Monkeypatch get_default_org_and_user to return Org B context inside the target routes namespace
+    # Monkeypatch get_default_org_and_user to return Org B context
+    # inside the target routes namespace
     monkeypatch.setattr(
         "app.web.routes.compliance.get_default_org_and_user",
         lambda session: (org_b_id, user_id),

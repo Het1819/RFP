@@ -126,6 +126,7 @@ RFP Text:
             if start != -1 and end != 0:
                 data = json.loads(content_text[start:end])
                 return [RequirementDraft(**item) for item in data]
+            raise ValueError("Failed to parse requirements from Anthropic response")
         except Exception as e:
             raise e
 
@@ -190,6 +191,7 @@ Return your answer strictly as a JSON object matching this schema:
                     assumptions=data.get("assumptions"),
                     evidence_links=evidence_snippets,
                 )
+            raise ValueError("Failed to parse draft response from Anthropic response")
         except Exception as e:
             raise e
 

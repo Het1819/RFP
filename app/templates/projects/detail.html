@@ -12,188 +12,311 @@
 </head>
 <body>
     <div class="glass-bg"></div>
-    <div class="container">
-        <header>
-            <div class="logo">
-                <span class="logo-icon">📐</span>
-                <span class="logo-text"><a href="/" style="text-decoration:none; color:inherit;">RFP Architect</a></span>
+    
+    <div class="app-shell" id="app-shell">
+        <!-- Sidebar overlay for mobile drawer -->
+        <div class="sidebar-overlay" onclick="document.getElementById('app-shell').classList.remove('sidebar-open')"></div>
+
+        <!-- Left Sidebar Navigation -->
+        <aside class="sidebar">
+            <a href="/" class="sidebar-logo">
+                <span class="logo-icon" style="font-size: 1.35rem;">📐</span>
+                <span class="logo-text" style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary);">RFP Architect</span>
+            </a>
+            
+            <ul class="sidebar-menu">
+                <li>
+                    <a href="/projects" class="sidebar-link active">
+                        <span style="font-size: 1.1rem;">📊</span>
+                        <span>Projects</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/" class="sidebar-link">
+                        <span style="font-size: 1.1rem;">🌐</span>
+                        <span>Landing Page</span>
+                    </a>
+                </li>
+            </ul>
+            
+            <div style="margin-top: auto; padding-top: var(--space-md); border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: var(--space-xs);">
+                <span class="badge" style="width: fit-content; font-size: 0.75rem;">MVP v0.1.0</span>
+                <span style="font-size: 0.75rem; color: var(--text-muted);">&copy; 2026 RFP Architect</span>
             </div>
-            <nav style="display: flex; align-items: center; gap: 1rem;">
-                <a href="/projects" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Projects</a>
-                <span class="badge">MVP v0.1.0</span>
-            </nav>
-        </header>
+        </aside>
 
-        <main style="padding-top: 2rem;">
-            <!-- Back Button -->
-            <a href="/projects" style="text-decoration: none; color: var(--text-muted); font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.25rem; margin-bottom: 1.5rem; transition: color 0.2s;" onmouseover="this.style.color='#ffffff'" onmouseout="this.style.color='var(--text-muted)'">&larr; Back to Projects</a>
-
-            <!-- Error Banner -->
-            {% if error_msg %}
-            <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.95rem;">
-                <span>⚠️</span>
-                <span><strong>Upload Error:</strong> {{ error_msg }}</span>
-            </div>
-            {% endif %}
-
-            <!-- Title & Client info -->
-            <div style="margin-bottom: 2rem;">
-                <h1 style="font-size: 2.25rem; font-weight: 700; margin-bottom: 0.5rem; color: #ffffff; letter-spacing: -0.02em;">{{ project.name }}</h1>
-                <p style="color: var(--text-muted); font-size: 1rem;">Client: <strong style="color: #ffffff;">{{ project.client_name }}</strong></p>
+        <!-- Main Workspace Space -->
+        <div class="main-content">
+            <!-- Mobile Top Navigation Bar -->
+            <div class="mobile-nav-bar">
+                <button class="menu-toggle-btn" onclick="document.getElementById('app-shell').classList.add('sidebar-open')">☰</button>
+                <div class="logo" style="display: flex; align-items: center; gap: 0.25rem;">
+                    <span class="logo-icon" style="font-size: 1.2rem;">📐</span>
+                    <span class="logo-text" style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);">RFP Architect</span>
+                </div>
+                <a href="/projects" class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; border-radius: var(--radius-sm);">&larr; Back</a>
             </div>
 
-            <!-- Dashboard Columns -->
-            <div style="display: grid; grid-template-columns: 1fr 1.5fr; gap: 2rem;">
-                <!-- Left: Project Info -->
-                <div style="display: flex; flex-direction: column; gap: 1.5rem;">
-                    <div class="feature-card" style="margin-top: 0; padding: 2rem;">
-                        <h3 style="font-size: 1.25rem; font-weight: 600; color: #ffffff; margin-bottom: 1.25rem;">Project Metadata</h3>
-                        
-                        <div style="display: flex; flex-direction: column; gap: 1rem; font-size: 0.95rem;">
-                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
-                                <span style="color: var(--text-muted);">Workspace Status</span>
-                                <span class="badge" style="background: rgba(99, 102, 241, 0.1); border-color: rgba(99, 102, 241, 0.3); color: #a5b4fc;">{{ project.status | upper }}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
-                                <span style="color: var(--text-muted);">Due Date</span>
-                                <span style="font-weight: 500; color: #ffffff;">{{ project.due_date.strftime('%Y-%m-%d') if project.due_date else 'Not set' }}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
-                                <span style="color: var(--text-muted);">Created At</span>
-                                <span style="font-weight: 500; color: #ffffff;">{{ project.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
-                            </div>
-                            <div style="display: flex; justify-content: space-between; padding-bottom: 0.25rem;">
-                                <span style="color: var(--text-muted);">Last Updated</span>
-                                <span style="font-weight: 500; color: #ffffff;">{{ project.updated_at.strftime('%Y-%m-%d %H:%M') }}</span>
-                            </div>
+            <!-- Desktop Workspace Top Bar -->
+            <header class="top-bar">
+                <div class="top-bar-left">
+                    <a href="/projects" style="text-decoration: none; font-size: 1.25rem; color: var(--text-muted); transition: color var(--transition-fast);" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-muted)'">&larr;</a>
+                    <div style="display: flex; flex-direction: column;">
+                        <span class="workspace-context">Proposal Workspace • {{ project.client_name }}</span>
+                        <span class="workspace-title">{{ project.name }}</span>
+                    </div>
+                </div>
+                <div class="top-bar-right">
+                    {% if document and document.processing_status == 'completed' %}
+                        <a href="/projects/{{ project.id }}/matrix" class="btn btn-primary" style="padding: 0.6rem 1.25rem; font-size: 0.9rem; border-radius: var(--radius-sm);">Open Compliance Matrix &rarr;</a>
+                    {% endif %}
+                </div>
+            </header>
+
+            <main class="dashboard-container">
+                <!-- Back Link for Tablet/Mobile -->
+                <a href="/projects" class="mobile-toggle" style="text-decoration: none; color: var(--text-muted); font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.25rem; margin-bottom: var(--space-md);">&larr; Back to Projects</a>
+
+                <!-- Error Banner -->
+                {% if error_msg %}
+                <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); color: #f87171; padding: var(--space-md) var(--space-lg); border-radius: var(--radius-md); margin-bottom: var(--space-lg); display: flex; align-items: center; gap: var(--space-sm); font-size: 0.95rem;">
+                    <span>⚠️</span>
+                    <span><strong>Upload Error:</strong> {{ error_msg }}</span>
+                </div>
+                {% endif %}
+
+                <!-- 1. Project Context Metadata Panel -->
+                <div class="feature-card" style="margin-top: 0; padding: var(--space-lg); display: flex; flex-wrap: wrap; gap: var(--space-xl); justify-content: space-between; align-items: center; border-color: var(--border-color);">
+                    <div style="display: flex; flex-direction: column; gap: var(--space-xs);">
+                        <span style="font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-muted); font-weight: 600;">Opportunity / Customer</span>
+                        <h2 style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.01em;">{{ project.client_name }}</h2>
+                    </div>
+                    <div style="display: flex; gap: var(--space-xl); flex-wrap: wrap;">
+                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                            <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500;">Status</span>
+                            <span class="badge" style="width: fit-content; font-size: 0.75rem;">{{ project.status | upper }}</span>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                            <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500;">Due Date</span>
+                            <span style="font-size: 0.9rem; font-weight: 600; color: var(--text-primary);">
+                                {{ project.due_date.strftime('%Y-%m-%d') if project.due_date else 'Not set' }}
+                            </span>
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                            <span style="font-size: 0.75rem; color: var(--text-muted); font-weight: 500;">Last Activity</span>
+                            <span style="font-size: 0.9rem; font-weight: 600; color: var(--text-primary);">
+                                {{ project.updated_at.strftime('%Y-%m-%d %H:%M') }}
+                            </span>
                         </div>
                     </div>
                 </div>
 
-                <!-- Right: RFP Status Polling container -->
-                <div>
-                    {% include "projects/status_partial.html" %}
-                </div>
-            </div>
+                <!-- 2. Dynamic Workflow Progress Stepper -->
+                {% set active_step = 1 %}
+                {% if document %}
+                    {% if document.processing_status == 'processing' %}
+                        {% set active_step = 2 %}
+                    {% elif document.processing_status == 'completed' %}
+                        {% set active_step = 4 %}
+                    {% else %}
+                        {% set active_step = 1 %}
+                    {% endif %}
+                {% endif %}
 
-            <!-- Knowledge Library Section -->
-            <div style="margin-top: 3rem; border-top: 1px solid var(--border-color); padding-top: 2rem;">
-                <h2 style="font-size: 1.75rem; font-weight: 700; color: #ffffff; margin-bottom: 1.5rem; letter-spacing: -0.02em; display: flex; align-items: center; gap: 0.5rem;">
-                    <span>📚</span> Approved Knowledge Library
-                </h2>
-
-                <div style="display: grid; grid-template-columns: 1.5fr 1fr; gap: 2rem;">
-                    <!-- Left: Documents List -->
-                    <div class="feature-card" style="margin-top: 0; padding: 2rem;">
-                        <h3 style="font-size: 1.25rem; font-weight: 600; color: #ffffff; margin-bottom: 1.25rem;">Knowledge Base Documents</h3>
-
-                        {% if not knowledge_docs %}
-                            <p style="color: var(--text-muted); font-size: 0.95rem; line-height: 1.6;">No knowledge base documents uploaded yet. Upload reference materials (past proposals, brochures, guidelines) on the right to assist with answer generation.</p>
-                        {% else %}
-                            <div style="display: flex; flex-direction: column; gap: 1rem;">
-                                {% for doc in knowledge_docs %}
-                                    <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 1.25rem; border-radius: 12px; display: flex; flex-direction: column; gap: 0.75rem;">
-                                        <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
-                                            <div>
-                                                <h4 style="font-weight: 600; color: #ffffff; font-size: 1.05rem; margin-bottom: 0.15rem;">{{ doc.name }}</h4>
-                                                <p style="font-size: 0.8rem; color: var(--text-muted);">
-                                                    Version: {{ doc.version or "1.0" }} | Owner: {{ doc.owner_name or "Unknown" }}
-                                                </p>
-                                            </div>
-                                            <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.4rem;">
-                                                <span class="badge" style="
-                                                    {% if doc.approval_status == 'APPROVED' %}
-                                                        background: rgba(16, 185, 129, 0.1); border-color: rgba(16, 185, 129, 0.3); color: #34d399;
-                                                    {% elif doc.approval_status == 'PENDING' %}
-                                                        background: rgba(245, 158, 11, 0.1); border-color: rgba(245, 158, 11, 0.3); color: #fbbf24;
-                                                    {% else %}
-                                                        background: rgba(239, 68, 68, 0.1); border-color: rgba(239, 68, 68, 0.3); color: #f87171;
-                                                    {% endif %}
-                                                    font-size: 0.75rem; padding: 0.2rem 0.5rem;
-                                                ">
-                                                    {{ doc.approval_status }}
-                                                </span>
-                                                <span style="font-size: 0.75rem; color: var(--text-muted);">
-                                                    Status: {{ doc.processing_status | upper }}
-                                                </span>
-                                            </div>
-                                        </div>
-                                        
-                                        {% if doc.tags or doc.review_date %}
-                                            <div style="display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; font-size: 0.8rem;">
-                                                {% if doc.tags %}
-                                                    <span style="color: var(--text-muted);">Tags:</span>
-                                                    {% for tag in doc.tags.split(',') %}
-                                                        <span style="background: rgba(255, 255, 255, 0.05); border: 1px solid var(--border-color); border-radius: 4px; padding: 0.1rem 0.4rem; color: #ffffff;">{{ tag.strip() }}</span>
-                                                    {% endfor %}
-                                                {% endif %}
-                                                
-                                                {% if doc.review_date %}
-                                                    <span style="color: var(--text-muted); margin-left: auto;">Review due: {{ doc.review_date.strftime('%Y-%m-%d') }}</span>
-                                                {% endif %}
-                                            </div>
-                                        {% endif %}
-                                    </div>
-                                {% endfor %}
-                            </div>
-                        {% endif %}
-                    </div>
-
-                    <!-- Right: Upload Form -->
-                    <div class="feature-card" style="margin-top: 0; padding: 2rem;">
-                        <h3 style="font-size: 1.25rem; font-weight: 600; color: #ffffff; margin-bottom: 1.25rem;">Upload Reference Material</h3>
+                <div class="feature-card" style="margin-top: var(--space-lg); padding: var(--space-lg); border-color: var(--border-color); overflow: hidden;">
+                    <div style="font-size: 0.8rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em; margin-bottom: var(--space-md);">RFP Workspace Journey</div>
+                    
+                    <div class="stepper-container">
+                        <div class="stepper-line">
+                            <div class="stepper-line-progress" style="width: {{ (active_step - 1) / 5 * 100 }}%;"></div>
+                        </div>
                         
-                        <form action="/projects/{{ project.id }}/knowledge" method="POST" enctype="multipart/form-data" style="display: flex; flex-direction: column; gap: 1rem;">
-                            <!-- File input -->
-                            <div style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-muted);">File (PDF or DOCX)*</label>
-                                <input type="file" name="file" accept=".pdf,.docx" required style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.5rem; color: #ffffff; font-family: inherit; font-size: 0.9rem; outline: none;">
-                            </div>
-
-                            <!-- Owner Name -->
-                            <div style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-muted);">Document Owner</label>
-                                <input type="text" name="owner_name" placeholder="e.g. Sales Team" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.6rem 0.8rem; color: #ffffff; font-family: inherit; font-size: 0.9rem; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='var(--border-color)'">
-                            </div>
-
-                            <!-- Tags -->
-                            <div style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-muted);">Tags (comma-separated)</label>
-                                <input type="text" name="tags" placeholder="e.g. security, pricing, corporate" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.6rem 0.8rem; color: #ffffff; font-family: inherit; font-size: 0.9rem; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='var(--border-color)'">
-                            </div>
-
-                            <!-- Version & Approval Status -->
-                            <div style="display: grid; grid-template-columns: 1fr 1.2fr; gap: 1rem;">
-                                <div style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                    <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-muted);">Version</label>
-                                    <input type="text" name="version" value="1.0" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.6rem 0.8rem; color: #ffffff; font-family: inherit; font-size: 0.9rem; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='var(--border-color)'">
-                                </div>
-                                <div style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                    <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-muted);">Approval Status</label>
-                                    <select name="approval_status" style="background: var(--bg-color); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.6rem 0.8rem; color: #ffffff; font-family: inherit; font-size: 0.9rem; outline: none; cursor: pointer;">
-                                        <option value="APPROVED" selected>APPROVED (Retrieval eligible)</option>
-                                        <option value="PENDING">PENDING</option>
-                                        <option value="REJECTED">REJECTED</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <!-- Review Date -->
-                            <div style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-muted);">Next Review Date</label>
-                                <input type="date" name="review_date" style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.6rem 0.8rem; color: #ffffff; font-family: inherit; font-size: 0.9rem; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='var(--border-color)'">
-                            </div>
-
-                            <button type="submit" class="btn btn-primary" style="margin-top: 0.5rem; padding: 0.75rem;">Upload Knowledge Doc</button>
-                        </form>
+                        <div class="stepper-step {% if active_step > 1 %}completed{% elif active_step == 1 %}active{% endif %}">
+                            <div class="stepper-circle">📁</div>
+                            <span class="stepper-label">Upload RFP</span>
+                        </div>
+                        <div class="stepper-step {% if active_step > 2 %}completed{% elif active_step == 2 %}active{% endif %}">
+                            <div class="stepper-circle">📋</div>
+                            <span class="stepper-label">Extract Reqs</span>
+                        </div>
+                        <div class="stepper-step {% if active_step > 3 %}completed{% elif active_step == 3 %}active{% endif %}">
+                            <div class="stepper-circle">🔗</div>
+                            <span class="stepper-label">Link Evidence</span>
+                        </div>
+                        <div class="stepper-step {% if active_step > 4 %}completed{% elif active_step == 4 %}active{% endif %}">
+                            <div class="stepper-circle">✍️</div>
+                            <span class="stepper-label">Draft Answers</span>
+                        </div>
+                        <div class="stepper-step {% if active_step > 5 %}completed{% elif active_step == 5 %}active{% endif %}">
+                            <div class="stepper-circle">👁️</div>
+                            <span class="stepper-label">Review</span>
+                        </div>
+                        <div class="stepper-step {% if active_step > 6 %}completed{% elif active_step == 6 %}active{% endif %}">
+                            <div class="stepper-circle">📤</div>
+                            <span class="stepper-label">Export</span>
+                        </div>
                     </div>
                 </div>
-            </div>
-        </main>
 
-        <footer>
-            <p>&copy; 2026 RFP Architect. Built with FastAPI, Jinja2, HTMX, and PostgreSQL.</p>
-        </footer>
+                <!-- 3. Detailed Working Areas -->
+                <div class="workspace-grid">
+                    
+                    <!-- Left: RFP File & Matrix Actions & Review Tasks -->
+                    <div style="display: flex; flex-direction: column; gap: var(--space-lg);">
+                        
+                        <!-- RFP Document Status (Uses status_partial.html include) -->
+                        <div>
+                            {% include "projects/status_partial.html" %}
+                        </div>
+
+                        <!-- Compliance Matrix Link Card -->
+                        {% if document and document.processing_status == 'completed' %}
+                        <div class="feature-card" style="margin-top: 0; padding: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-sm); border-color: var(--border-color);">
+                            <h3 style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: var(--space-sm);">
+                                <span>📋</span> Compliance & Requirements Matrix
+                            </h3>
+                            <p style="font-size: 0.95rem; color: var(--text-secondary); line-height: 1.6;">
+                                Review the list of extracted technical, operational, and business constraints. Classify requirements, link source evidence, and update compliance options.
+                            </p>
+                            <a href="/projects/{{ project.id }}/matrix" class="btn btn-secondary" style="width: fit-content; padding: 0.6rem 1.25rem; font-size: 0.9rem; border-color: var(--accent); color: var(--accent); background: transparent; margin-top: var(--space-xs);">
+                                Open Compliance Matrix &rarr;
+                            </a>
+                        </div>
+                        {% endif %}
+
+                        <!-- Export compilation area -->
+                        <div class="feature-card" style="margin-top: 0; padding: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-sm); border-color: var(--border-color);">
+                            <h3 style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: var(--space-sm);">
+                                <span>📤</span> Compile & Export Drafts
+                            </h3>
+                            <p style="font-size: 0.95rem; color: var(--text-secondary); line-height: 1.6;">
+                                Export structured tables and drafts compiled from source-backed responses once compliance matrix reviews are finalized.
+                            </p>
+                            
+                            {% if document and document.processing_status == 'completed' %}
+                            <div style="display: flex; gap: var(--space-md); flex-wrap: wrap; margin-top: var(--space-xs);">
+                                <a href="/projects/{{ project.id }}/export/proposal" class="btn btn-secondary" style="padding: 0.6rem 1.25rem; font-size: 0.9rem; border-radius: var(--radius-sm);">
+                                    📥 Download DOCX Proposal
+                                </a>
+                                <a href="/projects/{{ project.id }}/export/matrix" class="btn btn-secondary" style="padding: 0.6rem 1.25rem; font-size: 0.9rem; border-radius: var(--radius-sm);">
+                                    📥 Download XLSX Matrix
+                                </a>
+                            </div>
+                            {% else %}
+                            <div style="display: flex; gap: var(--space-sm); align-items: center; background: rgba(255,255,255,0.02); padding: var(--space-sm) var(--space-md); border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-top: var(--space-xs); font-size: 0.85rem; color: var(--text-muted);">
+                                <span>🔒</span>
+                                <span>Export actions will be enabled once the primary RFP document is processed.</span>
+                            </div>
+                            {% endif %}
+                        </div>
+
+                        <!-- Recent Review Tasks list wrapper -->
+                        <div class="feature-card" style="margin-top: 0; padding: var(--space-lg); border-color: var(--border-color);">
+                            <h3 style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary); margin-bottom: var(--space-md);">
+                                🎯 Recent Review Tasks
+                            </h3>
+                            <!-- Clear empty state placeholder -->
+                            <div style="text-align: center; padding: var(--space-xl) var(--space-md); display: flex; flex-direction: column; align-items: center; gap: var(--space-xs); background: rgba(255,255,255,0.01); border: 1px dashed var(--border-color); border-radius: var(--radius-md);">
+                                <span style="font-size: 1.8rem; color: var(--text-muted);">✓</span>
+                                <div style="font-weight: 600; color: var(--text-primary); font-size: 0.9rem;">No Active Review Conflicts</div>
+                                <p style="font-size: 0.8rem; color: var(--text-muted); max-width: 280px; line-height: 1.5;">All drafted proposal answers match evidence profiles. No human routing conflicts pending.</p>
+                            </div>
+                        </div>
+
+                    </div>
+
+                    <!-- Right Column: Approved Knowledge Library & High-Trust Callouts -->
+                    <div style="display: flex; flex-direction: column; gap: var(--space-lg);">
+                        
+                        <!-- High-Trust Rules Callout -->
+                        <div style="background: rgba(14, 165, 233, 0.04); border: 1px solid rgba(14, 165, 233, 0.2); border-left: 4px solid var(--accent); padding: var(--space-md) var(--space-lg); border-radius: var(--radius-md); display: flex; flex-direction: column; gap: var(--space-xs);">
+                            <div style="display: flex; align-items: center; gap: var(--space-sm); font-weight: 700; color: var(--text-primary); font-size: 0.9rem;">
+                                <span>🛡️</span> Citation & Gating Rule
+                            </div>
+                            <p style="font-size: 0.85rem; color: var(--text-secondary); line-height: 1.5; margin: 0;">
+                                Every generated response requires explicit page-referenced verification from the Approved Knowledge Library. The system returns <strong>NEEDS_EVIDENCE</strong> if references are missing. A human reviewer must manually approve all answers.
+                            </p>
+                        </div>
+
+                        <!-- Approved Knowledge Library list and uploader wrapper -->
+                        <div class="feature-card" style="margin-top: 0; padding: var(--space-lg); border-color: var(--border-color); display: flex; flex-direction: column; gap: var(--space-md);">
+                            <h3 style="font-size: 1.25rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: var(--space-xs);">
+                                📚 Approved Knowledge Library
+                            </h3>
+                            
+                            <!-- Knowledge Base Documents list -->
+                            <div style="display: flex; flex-direction: column; gap: var(--space-sm);">
+                                <h4 style="font-size: 0.85rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em; border-bottom: 1px solid var(--border-color); padding-bottom: 4px;">Uploaded Materials</h4>
+                                
+                                {% if not knowledge_docs %}
+                                    <div style="padding: var(--space-lg) var(--space-sm); text-align: center; border: 1px dashed var(--border-color); border-radius: var(--radius-md); font-size: 0.85rem; color: var(--text-muted);">
+                                        No knowledge library documents loaded yet.
+                                    </div>
+                                {% else %}
+                                    <div style="display: flex; flex-direction: column; gap: var(--space-sm); max-height: 300px; overflow-y: auto; padding-right: 4px;">
+                                        {% for doc in knowledge_docs %}
+                                            <div style="background: var(--surface-secondary); border: 1px solid var(--border-color); padding: var(--space-sm); border-radius: var(--radius-md); display: flex; flex-direction: column; gap: 4px;">
+                                                <div style="display: flex; justify-content: space-between; align-items: start; gap: var(--space-sm);">
+                                                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">{{ doc.name }}</span>
+                                                    <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0;">{{ doc.approval_status }}</span>
+                                                </div>
+                                                <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted);">
+                                                    <span>Owner: {{ doc.owner_name or 'N/A' }}</span>
+                                                    <span>v{{ doc.version or '1.0' }}</span>
+                                                </div>
+                                            </div>
+                                        {% endfor %}
+                                    </div>
+                                {% endif %}
+                            </div>
+
+                            <!-- Knowledge Library Uploader Form -->
+                            <div style="border-top: 1px solid var(--border-color); padding-top: var(--space-md); margin-top: var(--space-xs);">
+                                <h4 style="font-size: 0.85rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em; margin-bottom: var(--space-md);">Upload reference material</h4>
+                                
+                                <form action="/projects/{{ project.id }}/knowledge" method="POST" enctype="multipart/form-data" style="display: flex; flex-direction: column; gap: var(--space-sm);">
+                                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                                        <label for="k-file" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">File (PDF/DOCX)*</label>
+                                        <input type="file" id="k-file" name="file" accept=".pdf,.docx" required style="font-size: 0.85rem; padding: var(--space-xs); background: var(--surface-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary);">
+                                    </div>
+                                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                                        <label for="k-owner" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Owner</label>
+                                        <input type="text" id="k-owner" name="owner_name" placeholder="e.g. Sales Team" style="font-size: 0.85rem; border-radius: var(--radius-sm);">
+                                    </div>
+                                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                                        <label for="k-tags" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Tags</label>
+                                        <input type="text" id="k-tags" name="tags" placeholder="e.g. security, pricing" style="font-size: 0.85rem; border-radius: var(--radius-sm);">
+                                    </div>
+                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm);">
+                                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                                            <label for="k-ver" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Version</label>
+                                            <input type="text" id="k-ver" name="version" value="1.0" style="font-size: 0.85rem; border-radius: var(--radius-sm);">
+                                        </div>
+                                        <div style="display: flex; flex-direction: column; gap: 4px;">
+                                            <label for="k-status" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Status</label>
+                                            <select id="k-status" name="approval_status" style="font-size: 0.85rem; border-radius: var(--radius-sm); background: var(--surface-secondary); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.45rem;">
+                                                <option value="APPROVED" selected>APPROVED</option>
+                                                <option value="PENDING">PENDING</option>
+                                                <option value="REJECTED">REJECTED</option>
+                                            </select>
+                                        </div>
+                                    </div>
+                                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                                        <label for="k-date" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Next Review</label>
+                                        <input type="date" id="k-date" name="review_date" style="font-size: 0.85rem; border-radius: var(--radius-sm); color-scheme: dark;">
+                                    </div>
+                                    
+                                    <button type="submit" class="btn btn-primary" style="margin-top: var(--space-xs); padding: 0.6rem 1.25rem; font-size: 0.9rem; border-radius: var(--radius-sm);">
+                                        Upload Knowledge Document
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            </main>
+        </div>
     </div>
 </body>
 </html>

@@ -12,49 +12,266 @@
 </head>
 <body>
     <div class="glass-bg"></div>
-    <div class="container">
-        <header>
+    
+    <!-- Transparent-to-solid sticky navigation -->
+    <header class="sticky-header" id="main-header">
+        <div class="nav-container">
             <div class="logo">
                 <span class="logo-icon">📐</span>
                 <span class="logo-text">RFP Architect</span>
             </div>
-            <nav>
+            <nav style="display: flex; align-items: center; gap: var(--space-md);">
+                <a href="/projects" class="btn btn-secondary" style="padding: 0.5rem 1.25rem; font-size: 0.9rem; border-radius: var(--radius-sm);">Explore Workspace</a>
                 <span class="badge">MVP v0.1.0</span>
             </nav>
-        </header>
+        </div>
+    </header>
 
-        <main>
-            <section class="hero">
-                <h1 class="hero-title">Precision RFP Responses. <span class="gradient-text">Evidence-First.</span></h1>
-                <p class="hero-subtitle">Upload complex documents, extract clean requirements, verify citations, and draft perfect compliant bids—with complete human review control.</p>
-                <div class="cta-group">
-                    <a href="/projects" class="btn btn-primary">Launch Workspace</a>
-                    <a href="https://github.com" target="_blank" class="btn btn-secondary">Documentation</a>
+    <main class="landing-main">
+        <!-- Hero Section -->
+        <section class="hero-landing">
+            <div class="landing-container">
+                <h1 class="hero-title" style="margin-bottom: var(--space-lg); line-height: 1.15; font-size: clamp(2.5rem, 5vw, 3.75rem); font-weight: 850; letter-spacing: -0.03em; color: var(--text-primary);">
+                    Turn complex RFPs into<br><span class="gradient-text">source-backed proposal drafts.</span>
+                </h1>
+                <p class="hero-subtitle" style="max-width: 780px; margin: 0 auto 2.5rem auto; font-size: clamp(1rem, 2vw, 1.2rem); color: var(--text-secondary); line-height: 1.6;">
+                    Capture every requirement, reuse approved knowledge, validate evidence, and keep experts in control before submission.
+                </p>
+                <div class="cta-group" style="display: flex; gap: var(--space-md); justify-content: center; margin-bottom: 2rem;">
+                    <a href="/projects" class="btn btn-primary" style="padding: 0.85rem 2rem; font-size: 1rem;">Explore the Workspace</a>
+                    <a href="#how-it-works" class="btn btn-secondary" style="padding: 0.85rem 2rem; font-size: 1rem;">See How It Works</a>
                 </div>
-            </section>
+                
+                <!-- Interactive CSS/SVG Pipeline Visual -->
+                <div class="pipeline-visual">
+                    <div class="pipeline-node">
+                        <div class="pipeline-node-icon">📁</div>
+                        <div class="pipeline-node-label">RFP Upload</div>
+                    </div>
+                    <div class="pipeline-connector"></div>
+                    <div class="pipeline-node">
+                        <div class="pipeline-node-icon">📋</div>
+                        <div class="pipeline-node-label">Compliance Matrix</div>
+                    </div>
+                    <div class="pipeline-connector"></div>
+                    <div class="pipeline-node">
+                        <div class="pipeline-node-icon">🔍</div>
+                        <div class="pipeline-node-label">Evidence</div>
+                    </div>
+                    <div class="pipeline-connector"></div>
+                    <div class="pipeline-node">
+                        <div class="pipeline-node-icon">👁️</div>
+                        <div class="pipeline-node-label">Review</div>
+                    </div>
+                    <div class="pipeline-connector"></div>
+                    <div class="pipeline-node">
+                        <div class="pipeline-node-icon">📤</div>
+                        <div class="pipeline-node-label">Export</div>
+                    </div>
+                </div>
+            </div>
+        </section>
 
-            <section class="features">
-                <div class="feature-card">
-                    <div class="feature-icon">📁</div>
-                    <h3>Multi-Tenant Storage</h3>
-                    <p>Clean Organization-level data boundary isolation. Secure handling of untrusted RFP artifacts.</p>
+        <!-- Feature Pillars -->
+        <section class="features-section-landing">
+            <div class="landing-container">
+                <div class="section-header-landing">
+                    <div class="section-subtitle-landing">Capabilities</div>
+                    <h2 class="section-title-landing">Designed for Bid Precision</h2>
                 </div>
-                <div class="feature-card">
-                    <div class="feature-icon">🔍</div>
-                    <h3>Evidence Before Drafting</h3>
-                    <p>No LLM hallucination. Generates draft answers ONLY when backed by explicit, page-referenced document evidence.</p>
+                <div class="grid-landing">
+                    <div class="card-landing">
+                        <div class="card-landing-icon">📋</div>
+                        <h3>Capture Every Requirement</h3>
+                        <p>Instantly parse and extract all business, compliance, and technical requirements into an interactive compliance matrix.</p>
+                    </div>
+                    <div class="card-landing">
+                        <div class="card-landing-icon">🔍</div>
+                        <h3>Draft Only With Evidence</h3>
+                        <p>Never rely on generic model hallucination. Generated drafts require explicit page-by-page references from your approved knowledge library.</p>
+                    </div>
+                    <div class="card-landing">
+                        <div class="card-landing-icon">👁️</div>
+                        <h3>Keep Experts in Control</h3>
+                        <p>Assign pending items to expert domain reviewers to resolve information gaps, approve generated content, and coordinate response drafting.</p>
+                    </div>
+                    <div class="card-landing">
+                        <div class="card-landing-icon">📤</div>
+                        <h3>Export Review-Ready Proposals</h3>
+                        <p>Compile verified answers and compliance tables directly into standard DOCX and XLSX templates for immediate final inspection.</p>
+                    </div>
                 </div>
-                <div class="feature-card">
-                    <div class="feature-icon">👁️</div>
-                    <h3>Human-in-the-Loop</h3>
-                    <p>Complete control to override, edit, or approve all responses before final compilation export.</p>
-                </div>
-            </section>
-        </main>
+            </div>
+        </section>
 
-        <footer>
+        <!-- Workflow storytelling section -->
+        <section class="workflow-section" id="how-it-works">
+            <div class="landing-container">
+                <div class="section-header-landing">
+                    <div class="section-subtitle-landing">The Workflow</div>
+                    <h2 class="section-title-landing">How RFP Architect Works</h2>
+                </div>
+                <div class="workflow-container">
+                    <!-- Step 1 -->
+                    <div class="workflow-panel">
+                        <div class="workflow-info">
+                            <span class="workflow-step-num">Step 01</span>
+                            <h3>Ingest Complex RFP Documents</h3>
+                            <p>Securely upload PDF or DOCX RFP specifications. The platform instantly analyzes the text content within organization boundaries.</p>
+                            <ul class="workflow-features-list">
+                                <li>Strict tenant data separation</li>
+                                <li>Support for large multi-page RFPs</li>
+                                <li>Context preservation and text extraction</li>
+                            </ul>
+                        </div>
+                        <div class="workflow-preview">
+                            <div style="border: 2px dashed var(--border-color); border-radius: var(--radius-md); padding: var(--space-lg); text-align: center;">
+                                <div style="font-size: 2rem; margin-bottom: var(--space-sm); color: var(--accent);">📁</div>
+                                <div style="font-weight: 600; color: var(--text-primary); margin-bottom: var(--space-xs);">rfp_specification.docx</div>
+                                <div style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: var(--space-md);">12.4 MB • Upload Complete</div>
+                                <div style="height: 6px; background: var(--surface-secondary); border-radius: var(--radius-full); overflow: hidden;">
+                                    <div style="width: 100%; height: 100%; background: var(--accent);"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 2 -->
+                    <div class="workflow-panel">
+                        <div class="workflow-preview">
+                            <div style="background: var(--surface-secondary); border-radius: var(--radius-md); border: 1px solid var(--border-color); overflow: hidden; font-size: 0.8rem;">
+                                <div style="padding: var(--space-sm) var(--space-md); background: var(--surface-tertiary); font-weight: 600; display: grid; grid-template-columns: 80px 1fr 120px; border-bottom: 1px solid var(--border-color);">
+                                    <span>ID</span>
+                                    <span>Requirement</span>
+                                    <span>Status</span>
+                                </div>
+                                <div style="padding: var(--space-sm) var(--space-md); display: grid; grid-template-columns: 80px 1fr 120px; align-items: center; border-bottom: 1px solid var(--border-color);">
+                                    <span style="color: var(--accent); font-family: var(--font-mono);">REQ-001</span>
+                                    <span style="color: var(--text-primary);">Must support data isolation boundaries.</span>
+                                    <span><span class="status-badge status-APPROVED" style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">APPROVED</span></span>
+                                </div>
+                                <div style="padding: var(--space-sm) var(--space-md); display: grid; grid-template-columns: 80px 1fr 120px; align-items: center;">
+                                    <span style="color: var(--accent); font-family: var(--font-mono);">REQ-002</span>
+                                    <span style="color: var(--text-primary);">Provide encrypted compliance audit logs.</span>
+                                    <span><span class="status-badge status-NEEDS_EVIDENCE" style="font-size: 0.65rem; padding: 0.15rem 0.4rem;">NEEDS_EVIDENCE</span></span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="workflow-info">
+                            <span class="workflow-step-num">Step 02</span>
+                            <h3>Review the Compliance Matrix</h3>
+                            <p>Extracted requirements are compiled into an editable matrix workspace. Assign types, prioritize mandatory requests, and flag risk factors.</p>
+                            <ul class="workflow-features-list">
+                                <li>Automatic extraction and listing</li>
+                                <li>Mandatory clause detection</li>
+                                <li>Interactive, inline row edits</li>
+                            </ul>
+                        </div>
+                    </div>
+
+                    <!-- Step 3 -->
+                    <div class="workflow-panel">
+                        <div class="workflow-info">
+                            <span class="workflow-step-num">Step 03</span>
+                            <h3>Retrieve Page-Referenced Evidence</h3>
+                            <p>Query your approved library files. System aligns requirement descriptions with relevant corporate knowledge, returning page-by-page reference snippets.</p>
+                            <ul class="workflow-features-list">
+                                <li>Vector and full-text evidence matching</li>
+                                <li>Exact page number tracking</li>
+                                <li>Hallucination prevention</li>
+                            </ul>
+                        </div>
+                        <div class="workflow-preview">
+                            <div style="display: flex; flex-direction: column; gap: var(--space-sm); font-size: 0.8rem;">
+                                <div style="padding: var(--space-sm); background: rgba(239, 68, 68, 0.05); border-left: 3px solid var(--status-needs-evidence); border-radius: 4px;">
+                                    <div style="font-weight: 600; color: var(--text-primary); margin-bottom: 2px;">Requirement</div>
+                                    <div style="color: var(--text-secondary);">Query filter security row-level separation.</div>
+                                </div>
+                                <div style="font-size: 1.2rem; text-align: center; color: var(--text-muted);">⬇</div>
+                                <div style="padding: var(--space-sm); background: var(--surface-secondary); border: 1px solid var(--border-color); border-radius: 4px;">
+                                    <div style="display: flex; justify-content: space-between; font-weight: 600; color: var(--accent); margin-bottom: 4px;">
+                                        <span>📄 security_architecture.pdf</span>
+                                        <span>Page 14</span>
+                                    </div>
+                                    <div style="color: var(--text-secondary); font-style: italic;">"...All database queries filter strictly on organization_id to isolate multi-tenant schemas..."</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Step 4 -->
+                    <div class="workflow-panel">
+                        <div class="workflow-preview">
+                            <div style="background: var(--surface-primary); border: 1px solid var(--border-color); border-radius: var(--radius-md); padding: var(--space-md); display: flex; flex-direction: column; gap: var(--space-md); font-size: 0.85rem;">
+                                <div>
+                                    <span style="font-size: 0.75rem; text-transform: uppercase; color: var(--text-muted); font-weight: 600;">Response Draft</span>
+                                    <p style="color: var(--text-primary); font-weight: 500; margin-top: var(--space-xs);">We implement row-level security on PostgreSQL to filter all database requests by the organization's unique identifier.</p>
+                                </div>
+                                <div style="display: flex; gap: var(--space-sm);">
+                                    <button class="btn btn-primary" style="padding: var(--space-xs) var(--space-sm); font-size: 0.75rem; flex: 1; pointer-events: none; border-radius: var(--radius-sm);">Approve Response</button>
+                                    <button class="btn btn-secondary" style="padding: var(--space-xs) var(--space-sm); font-size: 0.75rem; flex: 1; pointer-events: none; border-radius: var(--radius-sm);">Export DOCX</button>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="workflow-info">
+                            <span class="workflow-step-num">Step 04</span>
+                            <h3>Expert Validation and Export</h3>
+                            <p>Domain experts evaluate draft responses, modify answers if necessary, approve compliant copies, and download finished proposal DOCX or XLSX compliance tables.</p>
+                            <ul class="workflow-features-list">
+                                <li>Human override and approval gating</li>
+                                <li>Export clean DOCX bid drafts</li>
+                                <li>Compile compliant XLSX spreadsheets</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Trust Section -->
+        <section class="trust-section">
+            <div class="landing-container">
+                <div class="trust-container">
+                    <h2 class="trust-title">Built for Controlled Proposal Workflows</h2>
+                    <p class="trust-text">RFP Architect is designed around strict data-handling boundaries and deterministic answer-evidence traceability.</p>
+                    <div class="trust-points">
+                        <div class="trust-point">
+                            <span class="trust-point-icon">🔒</span>
+                            <span class="trust-point-label">Tenant Isolation</span>
+                            <span class="trust-point-desc">PostgreSQL-level organization constraints</span>
+                        </div>
+                        <div class="trust-point">
+                            <span class="trust-point-icon">🔗</span>
+                            <span class="trust-point-label">Full Traceability</span>
+                            <span class="trust-point-desc">Citations map directly to source page numbers</span>
+                        </div>
+                        <div class="trust-point">
+                            <span class="trust-point-icon">🎯</span>
+                            <span class="trust-point-label">No Hallucinations</span>
+                            <span class="trust-point-desc">System returns NEEDS_EVIDENCE when backing is absent</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="landing-footer">
+        <div class="landing-container">
             <p>&copy; 2026 RFP Architect. Built with FastAPI, Jinja2, HTMX, and PostgreSQL.</p>
-        </footer>
-    </div>
+        </div>
+    </footer>
+
+    <!-- Header transparent-to-solid transition script -->
+    <script>
+        window.addEventListener('scroll', function() {
+            const header = document.getElementById('main-header');
+            if (window.scrollY > 50) {
+                header.classList.add('scrolled');
+            } else {
+                header.classList.remove('scrolled');
+            }
+        });
+    </script>
 </body>
 </html>
