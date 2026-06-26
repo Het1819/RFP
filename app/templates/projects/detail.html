@@ -79,7 +79,7 @@
 
                 <!-- Error Banner -->
                 {% if error_msg %}
-                <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); color: #f87171; padding: var(--space-md) var(--space-lg); border-radius: var(--radius-md); margin-bottom: var(--space-lg); display: flex; align-items: center; gap: var(--space-sm); font-size: 0.95rem;">
+                <div style="background: var(--status-needs-evidence-bg); border: 1px solid rgba(180, 35, 24, 0.2); color: var(--status-needs-evidence); padding: var(--space-md) var(--space-lg); border-radius: var(--radius-md); margin-bottom: var(--space-lg); display: flex; align-items: center; gap: var(--space-sm); font-size: 0.95rem;">
                     <span>⚠️</span>
                     <span><strong>Upload Error:</strong> {{ error_msg }}</span>
                 </div>
@@ -203,7 +203,7 @@
                                 </a>
                             </div>
                             {% else %}
-                            <div style="display: flex; gap: var(--space-sm); align-items: center; background: rgba(255,255,255,0.02); padding: var(--space-sm) var(--space-md); border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-top: var(--space-xs); font-size: 0.85rem; color: var(--text-muted);">
+                            <div style="display: flex; gap: var(--space-sm); align-items: center; background: var(--surface-tertiary); padding: var(--space-sm) var(--space-md); border-radius: var(--radius-md); border: 1px solid var(--border-color); margin-top: var(--space-xs); font-size: 0.85rem; color: var(--text-secondary);">
                                 <span>🔒</span>
                                 <span>Export actions will be enabled once the primary RFP document is processed.</span>
                             </div>
@@ -216,7 +216,7 @@
                                 🎯 Recent Review Tasks
                             </h3>
                             <!-- Clear empty state placeholder -->
-                            <div style="text-align: center; padding: var(--space-xl) var(--space-md); display: flex; flex-direction: column; align-items: center; gap: var(--space-xs); background: rgba(255,255,255,0.01); border: 1px dashed var(--border-color); border-radius: var(--radius-md);">
+                            <div style="text-align: center; padding: var(--space-xl) var(--space-md); display: flex; flex-direction: column; align-items: center; gap: var(--space-xs); background: var(--bg-color); border: 1px dashed var(--border-color); border-radius: var(--radius-md);">
                                 <span style="font-size: 1.8rem; color: var(--text-muted);">✓</span>
                                 <div style="font-weight: 600; color: var(--text-primary); font-size: 0.9rem;">No Active Review Conflicts</div>
                                 <p style="font-size: 0.8rem; color: var(--text-muted); max-width: 280px; line-height: 1.5;">All drafted proposal answers match evidence profiles. No human routing conflicts pending.</p>
@@ -303,7 +303,7 @@
                                     </div>
                                     <div style="display: flex; flex-direction: column; gap: 4px;">
                                         <label for="k-date" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Next Review</label>
-                                        <input type="date" id="k-date" name="review_date" style="font-size: 0.85rem; border-radius: var(--radius-sm); color-scheme: dark;">
+                                        <input type="date" id="k-date" name="review_date" style="font-size: 0.85rem; border-radius: var(--radius-sm); color-scheme: light;">
                                     </div>
                                     
                                     <button type="submit" class="btn btn-primary" style="margin-top: var(--space-xs); padding: 0.6rem 1.25rem; font-size: 0.9rem; border-radius: var(--radius-sm);">

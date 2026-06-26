@@ -1,34 +1,34 @@
 :root {
-    /* Color System (Dark Premium Graphite & Electric Teal) */
-    --bg-color: #07090e;                  /* Deep graphite body background */
-    --surface-primary: #0d111a;           /* Base surface panels */
-    --surface-secondary: #131926;         /* Elevated cards and inputs */
-    --surface-tertiary: #1c2537;          /* Hover states and details */
+    /* Color System (Light Premium B2B SaaS Workspace) */
+    --bg-color: #F7FAFF;                  /* App canvas */
+    --surface-primary: #FFFFFF;           /* Panel surface */
+    --surface-secondary: #FFFFFF;         /* Card surface */
+    --surface-tertiary: #F1F6FC;          /* Table headers / soft details */
     
-    --accent: #0ea5e9;                    /* Electric teal/blue accent */
-    --accent-hover: #0284c7;              /* Accent hover state */
-    --accent-glow: rgba(14, 165, 233, 0.15); /* Accent soft shadow glow */
+    --accent: #1269D3;                    /* Blue action */
+    --accent-hover: #0D57B2;              /* Blue hover */
+    --accent-glow: rgba(18, 105, 211, 0.08); /* Accent soft shadow glow */
     
-    --border-color: rgba(255, 255, 255, 0.06);     /* Subtle border lines */
-    --border-hover: rgba(255, 255, 255, 0.12);      /* Highlighted borders */
+    --border-color: #DCE6F3;              /* Border */
+    --border-hover: #B8CCF0;              /* Border Hover */
     
-    --text-primary: #f8fafc;              /* Off-white readable text */
-    --text-secondary: #cbd5e1;            /* Slate secondary text */
-    --text-muted: #64748b;                /* Muted gray placeholders/subtexts */
+    --text-primary: #0A1633;              /* Ink */
+    --text-secondary: #55657E;            /* Secondary ink */
+    --text-muted: #889BB4;                /* Muted text */
     
     /* Status Colors */
-    --status-not-started: #94a3b8;
-    --status-not-started-bg: rgba(148, 163, 184, 0.08);
-    --status-needs-evidence: #ef4444;
-    --status-needs-evidence-bg: rgba(239, 68, 68, 0.08);
-    --status-needs-review: #f59e0b;
-    --status-needs-review-bg: rgba(245, 158, 11, 0.08);
-    --status-approved: #10b981;
-    --status-approved-bg: rgba(16, 185, 129, 0.08);
-    --status-rejected: #ef4444;
-    --status-rejected-bg: rgba(239, 68, 68, 0.08);
-    --status-drafted: #3b82f6;
-    --status-drafted-bg: rgba(59, 130, 246, 0.08);
+    --status-not-started: #55657E;
+    --status-not-started-bg: #EAF4FF;
+    --status-needs-evidence: #B42318;     /* Danger */
+    --status-needs-evidence-bg: #FFF0F1;
+    --status-needs-review: #B66B00;       /* Warning */
+    --status-needs-review-bg: #FFF5E5;
+    --status-approved: #16835D;           /* Success */
+    --status-approved-bg: #EAF8F0;
+    --status-rejected: #B42318;
+    --status-rejected-bg: #FFF0F1;
+    --status-drafted: #1269D3;
+    --status-drafted-bg: #EAF4FF;
     
     /* Typography */
     --font-primary: 'Outfit', 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
@@ -84,7 +84,7 @@ body {
     left: 20%;
     width: 600px;
     height: 600px;
-    background: radial-gradient(circle, rgba(14, 165, 233, 0.04) 0%, transparent 70%);
+    background: radial-gradient(circle, rgba(18, 105, 211, 0.03) 0%, transparent 70%);
     filter: blur(80px);
     z-index: -1;
     pointer-events: none;
@@ -292,7 +292,7 @@ th, td {
 }
 
 th {
-    background: var(--surface-secondary);
+    background: var(--surface-tertiary);
     color: var(--text-primary);
     font-weight: 600;
     font-size: 0.85rem;
@@ -305,7 +305,7 @@ tr:last-child td {
 }
 
 tr:hover td {
-    background: rgba(255, 255, 255, 0.01);
+    background: #F7FAFF;
 }
 
 /* Status Badges */
@@ -934,13 +934,13 @@ footer {
 }
 
 .sidebar-link:hover {
-    color: var(--text-primary);
-    background-color: var(--surface-secondary);
+    color: var(--accent);
+    background-color: var(--surface-tertiary);
 }
 
 .sidebar-link.active {
     color: var(--accent);
-    background-color: rgba(14, 165, 233, 0.08);
+    background-color: var(--status-not-started-bg);
     font-weight: 600;
 }
 
@@ -958,7 +958,7 @@ footer {
     align-items: center;
     justify-content: space-between;
     padding: 0 var(--space-xl);
-    background-color: rgba(13, 17, 26, 0.5);
+    background-color: rgba(255, 255, 255, 0.85);
     backdrop-filter: blur(8px);
     position: sticky;
     top: 0;
@@ -1378,7 +1378,7 @@ footer {
     position: sticky;
     top: 0;
     z-index: 10;
-    background: var(--surface-secondary);
+    background: var(--surface-tertiary);
     backdrop-filter: blur(8px);
     border-bottom: 2px solid var(--border-color);
     color: var(--text-primary);
@@ -1398,7 +1398,7 @@ footer {
 }
 
 .matrix-table tr:hover td {
-    background: rgba(255, 255, 255, 0.015);
+    background: #F7FAFF;
 }
 
 /* Mobile responsive table-to-card transformations */

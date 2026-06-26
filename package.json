@@ -1,0 +1,34 @@
+{
+  "name": "rfp-architect-mvp",
+  "version": "1.0.0",
+  "description": "RFP Architect is a human-in-the-loop proposal response workspace designed to extract compliance matrices from RFPs, retrieve verified evidence from knowledge bases, and draft source-backed answers.",
+  "main": "index.js",
+  "directories": {
+    "doc": "docs",
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "assets:build": "vite build",
+    "assets:watch": "vite build --watch"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Het1819/RFP.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Het1819/RFP/issues"
+  },
+  "homepage": "https://github.com/Het1819/RFP#readme",
+  "dependencies": {
+    "gsap": "^3.15.0"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite": "^8.1.0"
+  }
+}

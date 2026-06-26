@@ -23,19 +23,19 @@
             border-radius: 9999px;
             display: inline-block;
         }
-        .status-NOT_STARTED { background: rgba(148, 163, 184, 0.1); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.2); }
-        .status-NEEDS_EVIDENCE { background: rgba(239, 68, 68, 0.1); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.2); }
-        .status-NEEDS_REVIEW { background: rgba(245, 158, 11, 0.1); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.2); }
-        .status-APPROVED { background: rgba(16, 185, 129, 0.1); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.2); }
-        .status-REJECTED { background: rgba(220, 38, 38, 0.1); color: #f87171; border: 1px solid rgba(220, 38, 38, 0.2); }
-        .status-DRAFTED { background: rgba(59, 130, 246, 0.1); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.2); }
+        .status-NOT_STARTED { background: var(--status-not-started-bg); color: var(--status-not-started); border: 1px solid rgba(85, 101, 126, 0.15); }
+        .status-NEEDS_EVIDENCE { background: var(--status-needs-evidence-bg); color: var(--status-needs-evidence); border: 1px solid rgba(180, 35, 24, 0.15); }
+        .status-NEEDS_REVIEW { background: var(--status-needs-review-bg); color: var(--status-needs-review); border: 1px solid rgba(182, 107, 0, 0.15); }
+        .status-APPROVED { background: var(--status-approved-bg); color: var(--status-approved); border: 1px solid rgba(22, 131, 93, 0.15); }
+        .status-REJECTED { background: var(--status-needs-evidence-bg); color: var(--status-needs-evidence); border: 1px solid rgba(180, 35, 24, 0.15); }
+        .status-DRAFTED { background: var(--status-drafted-bg); color: var(--status-drafted); border: 1px solid rgba(18, 105, 211, 0.15); }
 
         .form-control {
-            background: rgba(255, 255, 255, 0.02);
+            background: var(--surface-secondary);
             border: 1px solid var(--border-color);
             border-radius: 8px;
             padding: 0.6rem 0.8rem;
-            color: #ffffff;
+            color: var(--text-primary);
             font-family: inherit;
             font-size: 0.9rem;
             outline: none;
@@ -66,8 +66,8 @@
             <a href="/projects/{{ project.id }}/matrix" style="text-decoration: none; color: var(--text-muted); font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.25rem; margin-bottom: 1.5rem;">&larr; Back to Compliance Matrix</a>
 
             <div style="margin-bottom: 1.5rem;">
-                <h1 style="font-size: 2rem; font-weight: 700; color: #ffffff; letter-spacing: -0.02em; margin-bottom: 0.25rem;">Requirement Workspace</h1>
-                <p style="color: var(--text-muted); font-size: 0.95rem;">Retrieve evidence and draft source-backed responses for <strong style="color: #ffffff;">{{ project.name }}</strong>.</p>
+                <h1 style="font-size: 2rem; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; margin-bottom: 0.25rem;">Requirement Workspace</h1>
+                <p style="color: var(--text-secondary); font-size: 0.95rem;">Retrieve evidence and draft source-backed responses for <strong style="color: var(--text-primary);">{{ project.name }}</strong>.</p>
             </div>
 
             <div class="workspace-grid">
@@ -76,56 +76,56 @@
                     <!-- Requirement details card -->
                     <div class="feature-card" style="margin-top: 0; padding: 2rem;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
-                            <h3 style="font-size: 1.25rem; font-weight: 600; color: #ffffff;">Requirement Details</h3>
+                            <h3 style="font-size: 1.25rem; font-weight: 600; color: var(--text-primary);">Requirement Details</h3>
                             <span class="status-badge status-{{ req.status }}">{{ req.status }}</span>
                         </div>
 
-                        <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 1.25rem; border-radius: 10px; margin-bottom: 1.5rem;">
-                            <p style="font-size: 1rem; line-height: 1.6; color: #ffffff;">{{ req.original_text }}</p>
+                        <div style="background: var(--surface-tertiary); border: 1px solid var(--border-color); padding: 1.25rem; border-radius: 10px; margin-bottom: 1.5rem;">
+                            <p style="font-size: 1rem; line-height: 1.6; color: var(--text-primary);">{{ req.original_text }}</p>
                         </div>
 
                         <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.9rem;">
                             <div>
-                                <span style="color: var(--text-muted); display: block; margin-bottom: 0.15rem;">Source Section / Page</span>
-                                <strong style="color: #ffffff;">{{ req.source_section or "N/A" }} {% if req.source_page %}(Page {{ req.source_page }}){% endif %}</strong>
+                                <span style="color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Source Section / Page</span>
+                                <strong style="color: var(--text-primary);">{{ req.source_section or "N/A" }} {% if req.source_page %}(Page {{ req.source_page }}){% endif %}</strong>
                             </div>
                             <div>
-                                <span style="color: var(--text-muted); display: block; margin-bottom: 0.15rem;">Requirement Type</span>
-                                <strong style="color: #ffffff;">{{ req.requirement_type or "N/A" }}</strong>
+                                <span style="color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Requirement Type</span>
+                                <strong style="color: var(--text-primary);">{{ req.requirement_type or "N/A" }}</strong>
                             </div>
                             <div>
-                                <span style="color: var(--text-muted); display: block; margin-bottom: 0.15rem;">Mandatory</span>
-                                <strong style="color: {% if req.mandatory %}#f87171{% else %}#ffffff{% endif %};">{{ "YES" if req.mandatory else "NO" }}</strong>
+                                <span style="color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Mandatory</span>
+                                <strong style="color: {% if req.mandatory %}var(--status-needs-evidence){% else %}var(--text-primary){% endif %};">{{ "YES" if req.mandatory else "NO" }}</strong>
                             </div>
                             <div>
-                                <span style="color: var(--text-muted); display: block; margin-bottom: 0.15rem;">Risk Level</span>
-                                <strong style="color: {% if req.risk_level == 'High' %}#f87171{% elif req.risk_level == 'Medium' %}#fbbf24{% else %}#34d399{% endif %};">{{ req.risk_level or "Low" }}</strong>
+                                <span style="color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Risk Level</span>
+                                <strong style="color: {% if req.risk_level == 'High' %}var(--status-needs-evidence){% elif req.risk_level == 'Medium' %}var(--status-needs-review){% else %}var(--status-approved){% endif %};">{{ req.risk_level or "Low" }}</strong>
                             </div>
                             <div>
-                                <span style="color: var(--text-muted); display: block; margin-bottom: 0.15rem;">Assigned Owner</span>
-                                <strong style="color: #ffffff;">{{ req.owner_name or "Unassigned" }}</strong>
+                                <span style="color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Assigned Owner</span>
+                                <strong style="color: var(--text-primary);">{{ req.owner_name or "Unassigned" }}</strong>
                             </div>
                             <div>
-                                <span style="color: var(--text-muted); display: block; margin-bottom: 0.15rem;">Proposal Section</span>
-                                <strong style="color: #ffffff;">{{ req.proposal_section or "N/A" }}</strong>
+                                <span style="color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Proposal Section</span>
+                                <strong style="color: var(--text-primary);">{{ req.proposal_section or "N/A" }}</strong>
                             </div>
                         </div>
                     </div>
 
                     <!-- Linked Evidence Card -->
                     <div class="feature-card" style="margin-top: 0; padding: 2rem;">
-                        <h3 style="font-size: 1.25rem; font-weight: 600; color: #ffffff; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <h3 style="font-size: 1.25rem; font-weight: 600; color: var(--text-primary); margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
                             <span>🔗</span> Linked Evidence Links
                         </h3>
 
                         {% if not linked_evidence %}
-                            <p style="color: var(--text-muted); font-size: 0.9rem; line-height: 1.6;">No evidence links associated with this requirement yet. Search approved knowledge documents on the right and link relevant passages.</p>
+                            <p style="color: var(--text-secondary); font-size: 0.9rem; line-height: 1.6;">No evidence links associated with this requirement yet. Search approved knowledge documents on the right and link relevant passages.</p>
                         {% else %}
                             <div style="display: flex; flex-direction: column; gap: 1rem;">
                                 {% for evidence in linked_evidence %}
-                                    <div style="background: rgba(99, 102, 241, 0.03); border: 1px solid rgba(99, 102, 241, 0.2); padding: 1rem; border-radius: 10px;">
-                                        <p style="font-size: 0.9rem; line-height: 1.5; color: #f1f5f9; margin-bottom: 0.75rem; font-style: italic;">"{{ evidence.snippet }}"</p>
-                                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted);">
+                                    <div style="background: rgba(18, 105, 211, 0.03); border: 1px solid rgba(18, 105, 211, 0.2); padding: 1rem; border-radius: 10px;">
+                                        <p style="font-size: 0.9rem; line-height: 1.5; color: var(--text-primary); margin-bottom: 0.75rem; font-style: italic;">"{{ evidence.snippet }}"</p>
+                                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-secondary);">
                                             <span>Document ID: {{ evidence.document_id }}</span>
                                             <span>Page: {{ evidence.page_number or "N/A" }} | Match Score: {{ "%.2f"|format(evidence.score) }}</span>
                                         </div>
@@ -140,7 +140,7 @@
                 <div style="display: flex; flex-direction: column; gap: 1.5rem;">
                     <!-- Evidence Retrieval (FTS Search) -->
                     <div class="feature-card" style="margin-top: 0; padding: 2rem;">
-                        <h3 style="font-size: 1.25rem; font-weight: 600; color: #ffffff; margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
+                        <h3 style="font-size: 1.25rem; font-weight: 600; color: var(--text-primary); margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
                             <span>🔍</span> Search Knowledge Base
                         </h3>
 
@@ -151,16 +151,16 @@
 
                         <div style="max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; padding-right: 0.25rem;">
                             {% if not evidence_passages %}
-                                <p style="color: var(--text-muted); font-size: 0.9rem;">No matching evidence passages found in approved knowledge documents.</p>
+                                <p style="color: var(--text-secondary); font-size: 0.9rem;">No matching evidence passages found in approved knowledge documents.</p>
                             {% else %}
                                 {% for passage in evidence_passages %}
-                                    <div style="background: rgba(255, 255, 255, 0.02); border: 1px solid var(--border-color); padding: 1rem; border-radius: 10px; display: flex; flex-direction: column; gap: 0.75rem;">
-                                        <p style="font-size: 0.85rem; line-height: 1.5; color: var(--text-muted);">"{{ passage.snippet }}"</p>
+                                    <div style="background: var(--surface-tertiary); border: 1px solid var(--border-color); padding: 1rem; border-radius: 10px; display: flex; flex-direction: column; gap: 0.75rem;">
+                                        <p style="font-size: 0.85rem; line-height: 1.5; color: var(--text-secondary);">"{{ passage.snippet }}"</p>
                                         <div style="display: flex; justify-content: space-between; align-items: center;">
-                                            <span style="font-size: 0.75rem; color: var(--text-muted);">
+                                            <span style="font-size: 0.75rem; color: var(--text-secondary);">
                                                 <strong>{{ passage.doc_name }}</strong> {% if passage.page_number %}(Page {{ passage.page_number }}){% endif %}
                                             </span>
-                                            <span class="badge" style="font-size: 0.7rem; background: rgba(59, 130, 246, 0.1); border-color: rgba(59, 130, 246, 0.3); color: #60a5fa; margin-right: auto; margin-left: 0.5rem;">Score: {{ "%.2f"|format(passage.score) }}</span>
+                                            <span class="badge" style="font-size: 0.7rem; background: var(--status-drafted-bg); border-color: var(--border-color); color: var(--status-drafted); margin-right: auto; margin-left: 0.5rem;">Score: {{ "%.2f"|format(passage.score) }}</span>
                                             
                                             <form action="/requirements/{{ req.id }}/evidence/link" method="POST">
                                                 <input type="hidden" name="document_id" value="{{ passage.doc_id }}">
@@ -179,11 +179,11 @@
                     <!-- Draft Response Card -->
                     <div class="feature-card" style="margin-top: 0; padding: 2rem;">
                         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.25rem;">
-                            <h3 style="font-size: 1.25rem; font-weight: 600; color: #ffffff; display: flex; align-items: center; gap: 0.5rem;">
+                            <h3 style="font-size: 1.25rem; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 0.5rem;">
                                 <span>✍️</span> Draft Response Workspace
                             </h3>
                             {% if draft %}
-                                <span class="badge" style="background: rgba(99, 102, 241, 0.1); border-color: rgba(99, 102, 241, 0.3); color: #a5b4fc; font-size: 0.75rem;">
+                                <span class="badge" style="background: var(--light-blue); border-color: var(--border-color); color: var(--accent); font-size: 0.75rem;">
                                     {{ draft.status | upper }}
                                 </span>
                             {% endif %}
@@ -191,7 +191,7 @@
 
                         {% if not draft %}
                             <div style="text-align: center; padding: 2rem 1rem;">
-                                <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.25rem; line-height: 1.5;">No draft answer has been generated or written yet. Click below to draft a source-backed response utilizing linked evidence passages.</p>
+                                <p style="color: var(--text-secondary); font-size: 0.95rem; margin-bottom: 1.25rem; line-height: 1.5;">No draft answer has been generated or written yet. Click below to draft a source-backed response utilizing linked evidence passages.</p>
                                 <form action="/requirements/{{ req.id }}/draft" method="POST">
                                     <button type="submit" class="btn btn-primary" style="padding: 0.75rem 2rem;">Draft Answer (AI / Fallback)</button>
                                 </form>
@@ -200,25 +200,25 @@
                             <form action="/requirements/{{ req.id }}/draft/edit" method="POST" style="display: flex; flex-direction: column; gap: 1rem;">
                                 <!-- Answer text field -->
                                 <div style="display: flex; flex-direction: column; gap: 0.35rem;">
-                                    <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-muted);">Answer Text</label>
-                                    <textarea name="content" required style="width: 100%; height: 180px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; color: #fff; font-family: inherit; font-size: 0.95rem; line-height: 1.5; resize: vertical; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='var(--border-color)'">{{ draft.content }}</textarea>
+                                    <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-secondary);">Answer Text</label>
+                                    <textarea name="content" required style="width: 100%; height: 180px; background: var(--surface-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; color: var(--text-primary); font-family: inherit; font-size: 0.95rem; line-height: 1.5; resize: vertical; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border-color)'">{{ draft.content }}</textarea>
                                 </div>
 
                                 <!-- Metadata info: confidence and assumptions -->
-                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.85rem; background: rgba(255,255,255,0.01); border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px;">
+                                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; font-size: 0.85rem; background: var(--surface-tertiary); border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px;">
                                     <div>
-                                        <span style="color: var(--text-muted); display: block; margin-bottom: 0.15rem;">Draft Confidence</span>
-                                        <strong style="color: #ffffff; font-size: 1rem;">{{ "%.0f"|format(draft.confidence * 100) }}%</strong>
+                                        <span style="color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Draft Confidence</span>
+                                        <strong style="color: var(--text-primary); font-size: 1rem;">{{ "%.0f"|format(draft.confidence * 100) }}%</strong>
                                     </div>
                                     <div>
-                                        <span style="color: var(--text-muted); display: block; margin-bottom: 0.15rem;">Needs Evidence</span>
-                                        <strong style="color: {% if draft.needs_evidence %}#f87171{% else %}#34d399{% endif %}; font-size: 1rem;">
+                                        <span style="color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Needs Evidence</span>
+                                        <strong style="color: {% if draft.needs_evidence %}var(--status-needs-evidence){% else %}var(--status-approved){% endif %}; font-size: 1rem;">
                                             {{ "YES" if draft.needs_evidence else "NO" }}
                                         </strong>
                                     </div>
                                     <div style="grid-column: span 2; margin-top: 0.25rem;">
-                                        <span style="color: var(--text-muted); display: block; margin-bottom: 0.15rem;">Assumptions</span>
-                                        <p style="color: #f1f5f9; line-height: 1.4; font-style: italic;">{{ draft.assumptions or "None recorded." }}</p>
+                                        <span style="color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Assumptions</span>
+                                        <p style="color: var(--text-secondary); line-height: 1.4; font-style: italic;">{{ draft.assumptions or "None recorded." }}</p>
                                     </div>
                                 </div>
 
@@ -231,10 +231,10 @@
                             <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
                                 <div style="display: flex; gap: 0.5rem;">
                                     <form action="/requirements/{{ req.id }}/draft/approve" method="POST">
-                                        <button type="submit" class="btn btn-primary" style="background: #10b981; box-shadow: none; padding: 0.5rem 1.25rem; font-size: 0.85rem;" onmouseover="this.style.background='#059669'" onmouseout="this.style.background='#10b981'">Approve Answer</button>
+                                        <button type="submit" class="btn btn-primary" style="background: var(--status-approved); box-shadow: none; padding: 0.5rem 1.25rem; font-size: 0.85rem;" onmouseover="this.style.background='#126a4b'" onmouseout="this.style.background='var(--status-approved)'">Approve Answer</button>
                                     </form>
                                     <form action="/requirements/{{ req.id }}/draft/reject" method="POST">
-                                        <button type="submit" class="btn btn-secondary" style="border-color: rgba(239, 68, 68, 0.2); color: #f87171; padding: 0.5rem 1.25rem; font-size: 0.85rem;">Reject Answer</button>
+                                        <button type="submit" class="btn btn-secondary" style="border-color: rgba(180, 35, 24, 0.2); color: var(--status-needs-evidence); padding: 0.5rem 1.25rem; font-size: 0.85rem;">Reject Answer</button>
                                     </form>
                                 </div>
                                 <form action="/requirements/{{ req.id }}/draft/regenerate" method="POST">
@@ -244,7 +244,7 @@
 
                             <!-- Assign reviewer form -->
                             <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
-                                <h4 style="font-size: 0.95rem; font-weight: 600; color: #ffffff; margin-bottom: 0.75rem;">Route Gap to Reviewer</h4>
+                                <h4 style="font-size: 0.95rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.75rem;">Route Gap to Reviewer</h4>
                                 <form action="/requirements/{{ req.id }}/assign" method="POST" style="display: flex; gap: 0.5rem;">
                                     <input type="text" name="reviewer_name" required placeholder="Enter reviewer name..." class="form-control" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;">
                                     <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1.25rem; font-size: 0.85rem; flex-shrink: 0;">Assign</button>

@@ -79,7 +79,7 @@
 
                 <!-- Error Banner -->
                 {% if error_msg %}
-                <div style="background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.2); color: #f87171; padding: var(--space-md) var(--space-lg); border-radius: var(--radius-md); margin-bottom: var(--space-lg); display: flex; align-items: center; gap: var(--space-sm); font-size: 0.95rem;">
+                <div style="background: var(--status-needs-evidence-bg); border: 1px solid rgba(180, 35, 24, 0.2); color: var(--status-needs-evidence); padding: var(--space-md) var(--space-lg); border-radius: var(--radius-md); margin-bottom: var(--space-lg); display: flex; align-items: center; gap: var(--space-sm); font-size: 0.95rem;">
                     <span>⚠️</span>
                     <span>{{ error_msg }}</span>
                 </div>
@@ -147,7 +147,7 @@
     </div>
 
     <!-- Split Modal Dialog -->
-    <div id="split-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(7, 9, 14, 0.8); backdrop-filter: blur(10px); z-index: 1200; justify-content: center; align-items: center;" onclick="document.getElementById('split-modal').style.display='none'">
+    <div id="split-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(10, 22, 51, 0.5); backdrop-filter: blur(10px); z-index: 1200; justify-content: center; align-items: center;" onclick="document.getElementById('split-modal').style.display='none'">
         <div class="feature-card" style="width: 100%; max-width: 500px; padding: 2.5rem; box-shadow: var(--shadow-lg), var(--shadow-glow); border-color: var(--border-hover);" onclick="event.stopPropagation()">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                 <h3 style="font-size: 1.35rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">Split Requirement</h3>
