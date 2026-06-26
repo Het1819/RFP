@@ -1,0 +1,45 @@
+<tr id="req-row-{{ req.id }}" style="background: rgba(99, 102, 241, 0.04);">
+    <td style="text-align: center;">
+        <input type="checkbox" disabled>
+    </td>
+    <td>
+        <input type="text" name="source_section" class="input-text" value="{{ req.source_section or '' }}" placeholder="Sec" style="font-size: 0.85rem;">
+        <input type="number" name="source_page" class="input-text" style="margin-top: 0.25rem; font-size: 0.85rem;" value="{{ req.source_page or '' }}" placeholder="Page">
+    </td>
+    <td>
+        <textarea name="original_text" class="input-text" style="height: 80px; resize: vertical; font-size: 0.9rem; line-height: 1.4;" required>{{ req.original_text }}</textarea>
+    </td>
+    <td>
+        <input type="text" name="requirement_type" class="input-text" value="{{ req.requirement_type or '' }}" placeholder="Type" style="font-size: 0.85rem;">
+    </td>
+    <td style="text-align: center;">
+        <input type="checkbox" name="mandatory" value="true" {% if req.mandatory %}checked{% endif %}>
+    </td>
+    <td>
+        <select name="status" class="input-text" style="font-size: 0.85rem;">
+            <option value="NOT_STARTED" {% if req.status == 'NOT_STARTED' %}selected{% endif %}>NOT_STARTED</option>
+            <option value="DRAFTED" {% if req.status == 'DRAFTED' %}selected{% endif %}>DRAFTED</option>
+            <option value="NEEDS_EVIDENCE" {% if req.status == 'NEEDS_EVIDENCE' %}selected{% endif %}>NEEDS_EVIDENCE</option>
+            <option value="NEEDS_REVIEW" {% if req.status == 'NEEDS_REVIEW' %}selected{% endif %}>NEEDS_REVIEW</option>
+            <option value="APPROVED" {% if req.status == 'APPROVED' %}selected{% endif %}>APPROVED</option>
+            <option value="REJECTED" {% if req.status == 'REJECTED' %}selected{% endif %}>REJECTED</option>
+        </select>
+    </td>
+    <td>
+        <input type="text" name="owner_name" class="input-text" value="{{ req.owner_name or '' }}" placeholder="Owner" style="font-size: 0.85rem;">
+        <input type="text" name="proposal_section" class="input-text" style="margin-top: 0.25rem; font-size: 0.85rem;" value="{{ req.proposal_section or '' }}" placeholder="Proposal Sec">
+    </td>
+    <td>
+        <select name="risk_level" class="input-text" style="font-size: 0.85rem;">
+            <option value="Low" {% if req.risk_level == 'Low' or not req.risk_level %}selected{% endif %}>Low</option>
+            <option value="Medium" {% if req.risk_level == 'Medium' %}selected{% endif %}>Medium</option>
+            <option value="High" {% if req.risk_level == 'High' %}selected{% endif %}>High</option>
+        </select>
+    </td>
+    <td style="text-align: right;">
+        <div style="display: inline-flex; gap: 0.5rem; justify-content: flex-end;">
+            <button type="button" hx-post="/requirements/{{ req.id }}/edit" hx-include="closest tr" hx-target="#req-row-{{ req.id }}" hx-swap="outerHTML" class="btn btn-primary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Save</button>
+            <button type="button" hx-get="/requirements/{{ req.id }}/cancel" hx-target="#req-row-{{ req.id }}" hx-swap="outerHTML" class="btn btn-secondary" style="padding: 0.35rem 0.75rem; font-size: 0.8rem;">Cancel</button>
+        </div>
+    </td>
+</tr>

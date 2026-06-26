@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RFP Architect — Compliance Matrix</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        .matrix-table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin-top: 1.5rem;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .matrix-table th, .matrix-table td {
+            padding: 1rem;
+            text-align: left;
+            border-bottom: 1px solid var(--border-color);
+            vertical-align: middle;
+        }
+        .matrix-table th {
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text-color);
+            font-weight: 600;
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .matrix-table tr:last-child td {
+            border-bottom: none;
+        }
+        .status-badge {
+            font-size: 0.75rem;
+            font-weight: 600;
+            padding: 0.25rem 0.6rem;
+            border-radius: 9999px;
+            display: inline-block;
+        }
+        .status-NOT_STARTED { background: rgba(148, 163, 184, 0.1); color: #94a3b8; border: 1px solid rgba(148, 163, 184, 0.2); }
+        .status-NEEDS_EVIDENCE { background: rgba(239, 68, 68, 0.1); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.2); }
+        .status-NEEDS_REVIEW { background: rgba(245, 158, 11, 0.1); color: #fbbf24; border: 1px solid rgba(245, 158, 11, 0.2); }
+        .status-APPROVED { background: rgba(16, 185, 129, 0.1); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.2); }
+        .status-REJECTED { background: rgba(220, 38, 38, 0.1); color: #f87171; border: 1px solid rgba(220, 38, 38, 0.2); }
+        .status-DRAFTED { background: rgba(59, 130, 246, 0.1); color: #60a5fa; border: 1px solid rgba(59, 130, 246, 0.2); }
+        
+        .input-text {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 0.5rem;
+            color: #fff;
+            font-family: inherit;
+            width: 100%;
+            outline: none;
+        }
+        .input-text:focus {
+            border-color: var(--primary);
+        }
+    </style>
+</head>
+<body>
+    <div class="glass-bg"></div>
+    <div class="container" style="max-width: 1400px;">
+        <header>
+            <div class="logo">
+                <span class="logo-icon">📐</span>
+                <span class="logo-text"><a href="/" style="text-decoration:none; color:inherit;">RFP Architect</a></span>
+            </div>
+            <nav style="display: flex; align-items: center; gap: 1rem;">
+                <a href="/projects/{{ project.id }}" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Workspace</a>
+                <span class="badge">MVP v0.1.0</span>
+            </nav>
+        </header>
+
+        <main style="padding-top: 2rem;">
+            <a href="/projects/{{ project.id }}" style="text-decoration: none; color: var(--text-muted); font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.25rem; margin-bottom: 1.5rem;">&larr; Back to Workspace</a>
+
+            {% if error_msg %}
+            <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #f87171; padding: 1rem; border-radius: 8px; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.5rem; font-size: 0.95rem;">
+                <span>⚠️</span>
+                <span>{{ error_msg }}</span>
+            </div>
+            {% endif %}
+
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                <div>
+                    <h1 style="font-size: 2.25rem; font-weight: 700; color: #ffffff; letter-spacing: -0.02em; margin-bottom: 0.25rem;">Compliance Matrix</h1>
+                    <p style="color: var(--text-muted); font-size: 0.95rem;">Review, merge, split, and edit extracted requirements for <strong style="color: #ffffff;">{{ project.name }}</strong>.</p>
+                </div>
+            </div>
+
+            <!-- Actions Bar -->
+            <form action="/projects/{{ project.id }}/matrix/merge" method="POST" id="matrix-form">
+                <div style="display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.01); border: 1px solid var(--border-color); padding: 1rem; border-radius: 12px; margin-bottom: 1rem;">
+                    <div style="display: flex; gap: 0.75rem; align-items: center;">
+                        <button type="submit" class="btn btn-primary" style="padding: 0.5rem 1.25rem; font-size: 0.85rem;">Merge Selected</button>
+                        <a href="/projects/{{ project.id }}/export/matrix" class="btn btn-secondary" style="padding: 0.5rem 1.25rem; font-size: 0.85rem; text-decoration: none;">Export XLSX</a>
+                        <a href="/projects/{{ project.id }}/export/proposal" class="btn btn-secondary" style="padding: 0.5rem 1.25rem; font-size: 0.85rem; text-decoration: none;">Export DOCX</a>
+                    </div>
+                    <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500;">{{ requirements | length }} Requirements Extracted</span>
+                </div>
+
+                <table class="matrix-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 40px; text-align: center;"><input type="checkbox" onclick="toggleAll(this)"></th>
+                            <th style="width: 100px;">Sec / Page</th>
+                            <th>Requirement Text</th>
+                            <th style="width: 110px;">Type</th>
+                            <th style="width: 90px;">Mandatory</th>
+                            <th style="width: 150px;">Status</th>
+                            <th style="width: 130px;">Owner</th>
+                            <th style="width: 80px;">Risk</th>
+                            <th style="width: 180px; text-align: right;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for req in requirements %}
+                            {% include "projects/matrix_row.html" %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </form>
+        </main>
+
+        <!-- Split Modal -->
+        <div id="split-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(11, 15, 25, 0.85); backdrop-filter: blur(10px); z-index: 100; justify-content: center; align-items: center;">
+            <div class="feature-card" style="width: 100%; max-width: 500px; padding: 2rem;" onclick="event.stopPropagation()">
+                <h3 style="margin-bottom: 1rem; color: #ffffff; font-size: 1.25rem;">Split Requirement</h3>
+                <form id="split-form" method="POST">
+                    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1rem; line-height: 1.5;">Enter the text segment to extract into a new requirement. It will be removed from the original requirement.</p>
+                    <textarea name="split_text" required placeholder="e.g. Requirement text to split off..." style="width: 100%; height: 120px; background: rgba(255,255,255,0.02); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; color: #fff; font-family: inherit; margin-bottom: 1.25rem; resize: vertical; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--primary)'" onblur="this.style.borderColor='var(--border-color)'"></textarea>
+                    <div style="display: flex; gap: 1rem; justify-content: flex-end;">
+                        <button type="button" onclick="document.getElementById('split-modal').style.display='none'" class="btn btn-secondary" style="padding: 0.5rem 1rem;">Cancel</button>
+                        <button type="submit" class="btn btn-primary" style="padding: 0.5rem 1rem;">Split</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <footer>
+            <p>&copy; 2026 RFP Architect. Built with FastAPI, Jinja2, HTMX, and PostgreSQL.</p>
+        </footer>
+    </div>
+
+    <script>
+        function toggleAll(master) {
+            const checkboxes = document.querySelectorAll('input[name="ids"]');
+            checkboxes.forEach(cb => cb.checked = master.checked);
+        }
+
+        function openSplitModal(reqId) {
+            const form = document.getElementById('split-form');
+            form.action = `/requirements/${reqId}/split`;
+            document.getElementById('split-modal').style.display = 'flex';
+        }
+    </script>
+</body>
+</html>

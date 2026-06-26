@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RFP Architect — Proposal Projects</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+</head>
+<body>
+    <div class="glass-bg"></div>
+    <div class="container">
+        <header>
+            <div class="logo">
+                <span class="logo-icon">📐</span>
+                <span class="logo-text"><a href="/" style="text-decoration:none; color:inherit;">RFP Architect</a></span>
+            </div>
+            <nav style="display: flex; align-items: center; gap: 1rem;">
+                <a href="/projects" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Projects</a>
+                <span class="badge">MVP v0.1.0</span>
+            </nav>
+        </header>
+
+        <main style="padding-top: 2rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;">
+                <div>
+                    <h1 style="font-size: 2.25rem; font-weight: 700; margin-bottom: 0.5rem; letter-spacing: -0.02em;">Proposal Projects</h1>
+                    <p style="color: var(--text-muted);">Manage your RFP workspaces and responses.</p>
+                </div>
+                <button onclick="document.getElementById('create-modal').style.display='flex'" class="btn btn-primary">+ New Project</button>
+            </div>
+
+            <!-- Projects Grid -->
+            <div class="features" style="margin-top: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 1.5rem;">
+                {% if not projects %}
+                <div class="feature-card" style="grid-column: 1 / -1; text-align: center; padding: 4rem 2rem;">
+                    <div style="font-size: 3rem; margin-bottom: 1rem;">📂</div>
+                    <h3 style="margin-bottom: 0.5rem;">No projects found</h3>
+                    <p style="margin-bottom: 1.5rem;">Get started by creating your first proposal project workspace.</p>
+                    <button onclick="document.getElementById('create-modal').style.display='flex'" class="btn btn-primary">Create Project</button>
+                </div>
+                {% else %}
+                    {% for proj in projects %}
+                    <div class="feature-card" style="display: flex; flex-direction: column; justify-content: space-between; min-height: 200px; cursor: pointer;" onclick="window.location.href='/projects/{{ proj.id }}'">
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 1rem;">
+                                <span class="badge" style="background: rgba(99, 102, 241, 0.1); border-color: rgba(99, 102, 241, 0.3); color: #a5b4fc;">{{ proj.status | upper }}</span>
+                                <span style="font-size: 0.8rem; color: var(--text-muted);">Due: {{ proj.due_date.strftime('%Y-%m-%d') if proj.due_date else 'N/A' }}</span>
+                            </div>
+                            <h3 style="margin-bottom: 0.5rem; text-decoration: none; color: #ffffff;">{{ proj.name }}</h3>
+                            <p style="font-size: 0.95rem; color: var(--text-muted); margin-bottom: 1rem;">Client: <strong>{{ proj.client_name }}</strong></p>
+                        </div>
+                        <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 1rem; margin-top: auto; font-size: 0.8rem; color: var(--text-muted);">
+                            <span>Created: {{ proj.created_at.strftime('%Y-%m-%d') }}</span>
+                            <span style="color: var(--primary); font-weight: 600;">Open Workspace &rarr;</span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+
+            <!-- Create Project Modal -->
+            <div id="create-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(11, 15, 25, 0.85); backdrop-filter: blur(10px); z-index: 100; justify-content: center; align-items: center;">
+                <div class="feature-card" style="width: 100%; max-width: 500px; padding: 2.5rem; box-shadow: 0 20px 50px rgba(0,0,0,0.6);" onclick="event.stopPropagation()">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+                        <h2 style="font-size: 1.5rem; font-weight: 700; color: #ffffff;">Create Project</h2>
+                        <button onclick="document.getElementById('create-modal').style.display='none'" style="background: none; border: none; color: var(--text-muted); font-size: 1.75rem; cursor: pointer; line-height: 1;">&times;</button>
+                    </div>
+                    <form action="/projects" method="POST" style="display: flex; flex-direction: column; gap: 1.25rem;">
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            <label for="name" style="font-size: 0.9rem; font-weight: 500; color: var(--text-muted);">Project Name</label>
+                            <input type="text" id="name" name="name" required placeholder="e.g. Acme Security System RFP" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; color: #fff; font-family: inherit; font-size: 0.95rem; outline: none; transition: border-color 0.2s;">
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            <label for="client_name" style="font-size: 0.9rem; font-weight: 500; color: var(--text-muted);">Client Name</label>
+                            <input type="text" id="client_name" name="client_name" required placeholder="e.g. Acme Corp" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; color: #fff; font-family: inherit; font-size: 0.95rem; outline: none; transition: border-color 0.2s;">
+                        </div>
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                            <label for="due_date" style="font-size: 0.9rem; font-weight: 500; color: var(--text-muted);">Due Date</label>
+                            <input type="date" id="due_date" name="due_date" style="background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; color: #fff; font-family: inherit; font-size: 0.95rem; outline: none; color-scheme: dark;">
+                        </div>
+                        <div style="display: flex; gap: 1rem; justify-content: flex-end; margin-top: 1rem;">
+                            <button type="button" onclick="document.getElementById('create-modal').style.display='none'" class="btn btn-secondary" style="padding: 0.6rem 1.5rem;">Cancel</button>
+                            <button type="submit" class="btn btn-primary" style="padding: 0.6rem 1.5rem;">Create</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>&copy; 2026 RFP Architect. Built with FastAPI, Jinja2, HTMX, and PostgreSQL.</p>
+        </footer>
+    </div>
+</body>
+</html>

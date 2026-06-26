@@ -84,3 +84,49 @@ Alternatively, run tasks individually:
   ```bash
   make typecheck
   ```
+
+## RFP Upload Workflow (Slice 2)
+
+### 1. Launch dev server
+Ensure PostgreSQL database is running, then run the FastAPI server:
+```bash
+make dev
+```
+
+### 2. Navigate to projects list
+Go to `http://127.0.0.1:8000/projects` to list and create proposal projects.
+
+### 3. Open project detail
+Click on a project to enter its workspace.
+
+### 4. Upload RFP document
+Upload exactly one PDF or DOCX file. Once uploaded:
+- The system validates file size (Max 10MB), MIME type, extension, and content.
+- A background task extracts page-by-page text.
+- Live progress is displayed via HTMX polling.
+
+## Compliance Matrix Workflow (Slice 3)
+1. Navigate to **Compliance Matrix** from project detail page.
+2. View extracted requirements and their classification (Section, Page, Risk, Type, Mandatory).
+3. Select checkboxes and click **Merge Selected** to merge multiple requirements.
+4. Click **Split** on any requirement row to split off text segments into new requirements.
+5. Click **Edit** to update requirement metadata (Owner, Proposal Section, Status) inline.
+
+## Knowledge Library & Evidence Retrieval (Slice 4)
+1. On the project detail page, use the **Approved Knowledge Library** section to upload past proposal documents (PDF or DOCX).
+2. Set document owner, tags, version, and approval status.
+3. Click **Workspace** on any requirement in the Compliance Matrix.
+4. The system automatically searches the approved knowledge library using full-text search (FTS) based on the requirement text.
+5. Review evidence excerpts and click **Link Evidence** to associate them with the requirement.
+
+## Source-Backed Draft Answers (Slice 5)
+1. In the **Requirement Workspace**, click **Draft Answer (AI / Fallback)**.
+2. If no evidence links are present, the system returns `NEEDS_EVIDENCE` and flags it.
+3. If evidence is linked, the system uses the configured `LLMProvider` (Fake or Anthropic) to draft a source-backed response.
+4. View draft response text, confidence score, and assumptions.
+5. Use **Approve Answer** or **Reject Answer** to update the status.
+
+## Review Workflow & Exports (Slice 6)
+1. Assign reviewers to unresolved requirements by entering their name under **Route Gap to Reviewer**.
+2. From the Compliance Matrix actions bar, export the entire requirements list to **XLSX**.
+3. Export a compiled proposal draft to **DOCX** containing only approved responses.

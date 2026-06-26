@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     REDIS_URL: str = "redis://localhost:6379/0"
     STORAGE_BACKEND: str = "local"
     LOCAL_STORAGE_PATH: str = "./data"
+    MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10 MB default
     LLM_PROVIDER: str = "fake"
     ANTHROPIC_API_KEY: str = ""
     LLM_MODEL: str = ""

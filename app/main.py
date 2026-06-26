@@ -6,7 +6,10 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from app.web.routes.compliance import router as compliance_router
+
 # Ensure configuration is loaded and database models/connections are importable
+from app.web.routes.projects import router as projects_router
 
 app = FastAPI(
     title="RFP Architect MVP",
@@ -21,6 +24,10 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 
 # Templates
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+# Include routers
+app.include_router(projects_router)
+app.include_router(compliance_router)
 
 
 @app.get("/health")
