@@ -176,7 +176,9 @@ def process_document_background(
     """Background task to extract text and update status."""
     db = db_session_factory()
     try:
-        doc = db.get(Document, document_id)
+        doc = db.execute(
+            select(Document).where(Document.id == document_id).with_for_update()
+        ).scalar_one_or_none()
         if not doc:
             return
 
@@ -199,10 +201,11 @@ def process_document_background(
         doc.processing_status = "completed"
         db.commit()
 
-        # Trigger requirement extraction
-        from app.services.extraction_service import run_extraction_sync
+        # Trigger requirement extraction only for RFP documents
+        if doc.doc_role == "rfp":
+            from app.services.extraction_service import run_extraction_sync
 
-        run_extraction_sync(db, doc.id)
+            run_extraction_sync(db, doc.id)
 
         # Log Success
         proj = db.get(ProposalProject, doc.project_id)
@@ -219,9 +222,12 @@ def process_document_background(
     except Exception as e:
         db.rollback()
         # Fetch document again to update status to failed
-        doc = db.get(Document, document_id)
+        doc = db.execute(
+            select(Document).where(Document.id == document_id).with_for_update()
+        ).scalar_one_or_none()
         if doc:
             doc.processing_status = "failed"
+            doc.processing_error = str(e)[:500]
             db.commit()
 
             proj = db.get(ProposalProject, doc.project_id)

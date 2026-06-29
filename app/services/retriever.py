@@ -1,3 +1,4 @@
+import re
 import uuid
 from typing import Any
 
@@ -16,8 +17,8 @@ def retrieve_evidence(
     if not clean_query:
         return []
 
-    # Strip characters that might break plainto_tsquery
-    clean_query = "".join(c for c in clean_query if c.isalnum() or c.isspace()).strip()
+    # Remove only chars that break plainto_tsquery; preserve hyphens, dots, parens, colons
+    clean_query = re.sub(r"[\'\\]", "", clean_query).strip()
     if not clean_query:
         return []
 

@@ -30,14 +30,26 @@ async def extract_requirements_from_document(
         .order_by(DocumentPage.page_number.asc())
     ).all()
 
-    full_text = "\n".join([p.content for p in pages])
-    drafts = await llm.extract_requirements(full_text)
+    batches = [pages[i : i + 10] for i in range(0, len(pages), 10)]
+    all_drafts = []
+    for batch in batches:
+        batch_text = "\n".join([f"[PAGE {p.page_number}]\n{p.content}" for p in batch])
+        drafts = await llm.extract_requirements(batch_text)
+        all_drafts.extend(drafts)
+
+    seen_prefixes = set()
+    unique_drafts = []
+    for d in all_drafts:
+        prefix = d.original_text[:100]
+        if prefix not in seen_prefixes:
+            seen_prefixes.add(prefix)
+            unique_drafts.append(d)
 
     proj = db.get(ProposalProject, doc.project_id)
     org_id = proj.organization_id if proj else doc.created_by_id
 
     requirements = []
-    for d in drafts:
+    for d in unique_drafts:
         req = Requirement(
             project_id=doc.project_id,
             source_document_id=doc.id,
@@ -73,5 +85,8 @@ def run_extraction_sync(db: Session, document_id: uuid.UUID) -> None:
     asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(extract_requirements_from_document(db, document_id))
+    except Exception as e:
+        db.rollback()
+        raise e
     finally:
         loop.close()

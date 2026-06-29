@@ -110,10 +110,12 @@ def upload_rfp_action(
             db, project_id, org_id, user_id, file, background_tasks
         )
     except HTTPException as e:
+        db.rollback()
         return RedirectResponse(
             url=f"/projects/{project_id}?error={e.detail}", status_code=303
         )
     except Exception as e:
+        db.rollback()
         return RedirectResponse(
             url=f"/projects/{project_id}?error={e!s}", status_code=303
         )

@@ -167,7 +167,9 @@ def test_knowledge_base_flow(client, db):
 
     db.expire_all()
     draft = db.scalars(
-        select(DraftResponse).where(DraftResponse.requirement_id == req.id)
+        select(DraftResponse)
+        .where(DraftResponse.requirement_id == req.id)
+        .order_by(DraftResponse.version.desc())
     ).first()
     assert draft is not None
     assert draft.needs_evidence is False
@@ -186,7 +188,9 @@ def test_knowledge_base_flow(client, db):
 
     db.expire_all()
     draft_empty = db.scalars(
-        select(DraftResponse).where(DraftResponse.requirement_id == req.id)
+        select(DraftResponse)
+        .where(DraftResponse.requirement_id == req.id)
+        .order_by(DraftResponse.version.desc())
     ).first()
     assert draft_empty is not None
     assert draft_empty.needs_evidence is True

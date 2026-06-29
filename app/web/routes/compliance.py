@@ -1,10 +1,12 @@
 import uuid
+from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
+from pydantic import BeforeValidator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,6 +14,40 @@ from app.core.database import get_db, get_default_org_and_user
 from app.models.project import ProposalProject
 from app.models.requirement import Requirement
 from app.services.project_service import log_audit_event
+
+
+class RequirementStatus(StrEnum):
+    NOT_STARTED = "NOT_STARTED"
+    NEEDS_EVIDENCE = "NEEDS_EVIDENCE"
+    DRAFTED = "DRAFTED"
+    NEEDS_REVIEW = "NEEDS_REVIEW"
+    APPROVED = "APPROVED"
+    REJECTED = "REJECTED"
+
+
+class RiskLevel(StrEnum):
+    High = "High"
+    Medium = "Medium"
+    Low = "Low"
+
+
+class RequirementType(StrEnum):
+    Technical = "Technical"
+    Compliance = "Compliance"
+    Commercial = "Commercial"
+    Procedural = "Procedural"
+
+
+def empty_to_none(v: Any) -> Any:
+    if v == "":
+        return None
+    return v
+
+
+OptionalRequirementType = Annotated[
+    RequirementType | None, BeforeValidator(empty_to_none)
+]
+OptionalRiskLevel = Annotated[RiskLevel | None, BeforeValidator(empty_to_none)]
 
 router = APIRouter(tags=["compliance"])
 
@@ -79,12 +115,12 @@ def update_requirement_action(
     original_text: str = Form(...),
     source_section: str = Form(None),
     source_page: int = Form(None),
-    requirement_type: str = Form(None),
+    requirement_type: OptionalRequirementType = Form(None),
     mandatory: bool = Form(False),
-    status: str = Form("NOT_STARTED"),
+    status: RequirementStatus = Form(RequirementStatus.NOT_STARTED),
     owner_name: str = Form(None),
     proposal_section: str = Form(None),
-    risk_level: str = Form(None),
+    risk_level: OptionalRiskLevel = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
     org_id, user_id = get_default_org_and_user(db)
@@ -263,8 +299,11 @@ def requirement_workspace_view(
     from app.services.retriever import retrieve_evidence
 
     q_param = request.query_params.get("q")
-    query_text = q_param if q_param is not None else req.original_text
-    evidence_passages = retrieve_evidence(db, req.project_id, query_text)
+    if q_param is not None:
+        search_query = q_param
+    else:
+        search_query = " ".join(req.original_text.split()[:8])
+    evidence_passages = retrieve_evidence(db, req.project_id, search_query)
 
     # Get existing linked evidence
     from app.models.evidence import EvidenceLink
@@ -277,7 +316,9 @@ def requirement_workspace_view(
     from app.models.response import DraftResponse
 
     draft = db.scalars(
-        select(DraftResponse).where(DraftResponse.requirement_id == requirement_id)
+        select(DraftResponse)
+        .where(DraftResponse.requirement_id == requirement_id)
+        .order_by(DraftResponse.version.desc())
     ).first()
 
     return templates.TemplateResponse(
@@ -289,7 +330,7 @@ def requirement_workspace_view(
             "evidence_passages": evidence_passages,
             "linked_evidence": linked_evidence,
             "draft": draft,
-            "q_query": query_text,
+            "search_query": search_query,
         },
     )
 
@@ -369,28 +410,27 @@ async def draft_requirement_response(
 
     draft_draft = await provider.draft_response(req.original_text, evidence_snippets)
 
+    from sqlalchemy import func
+
     from app.models.response import DraftResponse
 
-    draft = db.scalars(
-        select(DraftResponse).where(DraftResponse.requirement_id == requirement_id)
-    ).first()
-
-    if not draft:
-        draft = DraftResponse(
-            requirement_id=requirement_id,
-            content=draft_draft.answer_text,
-            confidence=draft_draft.confidence,
-            needs_evidence=draft_draft.needs_evidence,
-            assumptions=draft_draft.assumptions,
-            status="draft",
+    max_version = db.scalar(
+        select(func.max(DraftResponse.version)).where(
+            DraftResponse.requirement_id == requirement_id
         )
-        db.add(draft)
-    else:
-        draft.content = draft_draft.answer_text
-        draft.confidence = draft_draft.confidence
-        draft.needs_evidence = draft_draft.needs_evidence
-        draft.assumptions = draft_draft.assumptions
-        draft.status = "draft"
+    )
+    new_version = (max_version or 0) + 1
+
+    draft = DraftResponse(
+        requirement_id=requirement_id,
+        content=draft_draft.answer_text,
+        confidence=draft_draft.confidence,
+        needs_evidence=draft_draft.needs_evidence,
+        assumptions=draft_draft.assumptions,
+        status="draft",
+        version=new_version,
+    )
+    db.add(draft)
 
     if draft_draft.needs_evidence:
         req.status = "NEEDS_EVIDENCE"
@@ -431,7 +471,9 @@ def edit_draft_response(
     from app.models.response import DraftResponse
 
     draft = db.scalars(
-        select(DraftResponse).where(DraftResponse.requirement_id == requirement_id)
+        select(DraftResponse)
+        .where(DraftResponse.requirement_id == requirement_id)
+        .order_by(DraftResponse.version.desc())
     ).first()
 
     if not draft:
@@ -471,7 +513,9 @@ def approve_draft_response(
     from app.models.response import DraftResponse
 
     draft = db.scalars(
-        select(DraftResponse).where(DraftResponse.requirement_id == requirement_id)
+        select(DraftResponse)
+        .where(DraftResponse.requirement_id == requirement_id)
+        .order_by(DraftResponse.version.desc())
     ).first()
 
     if not draft:
@@ -512,7 +556,9 @@ def reject_draft_response(
     from app.models.response import DraftResponse
 
     draft = db.scalars(
-        select(DraftResponse).where(DraftResponse.requirement_id == requirement_id)
+        select(DraftResponse)
+        .where(DraftResponse.requirement_id == requirement_id)
+        .order_by(DraftResponse.version.desc())
     ).first()
 
     if not draft:
@@ -692,10 +738,12 @@ def export_proposal_docx(
     has_approved = False
     for req in requirements:
         draft = db.scalars(
-            select(DraftResponse).where(
+            select(DraftResponse)
+            .where(
                 DraftResponse.requirement_id == req.id,
                 DraftResponse.status == "approved",
             )
+            .order_by(DraftResponse.version.desc())
         ).first()
 
         if draft:

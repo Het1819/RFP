@@ -10,7 +10,13 @@
         <textarea name="original_text" class="input-text" style="height: 80px; resize: vertical; font-size: 0.9rem; line-height: 1.4; border-radius: var(--radius-sm);" required>{{ req.original_text }}</textarea>
     </td>
     <td data-label="Type">
-        <input type="text" name="requirement_type" class="input-text" value="{{ req.requirement_type or '' }}" placeholder="Type" style="font-size: 0.85rem; border-radius: var(--radius-sm);">
+        <select name="requirement_type" class="input-text" style="font-size: 0.85rem; border-radius: var(--radius-sm); background: var(--surface-secondary); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.45rem;">
+            <option value="" {% if not req.requirement_type %}selected{% endif %}>None</option>
+            <option value="Technical" {% if req.requirement_type == 'Technical' %}selected{% endif %}>Technical</option>
+            <option value="Compliance" {% if req.requirement_type == 'Compliance' %}selected{% endif %}>Compliance</option>
+            <option value="Commercial" {% if req.requirement_type == 'Commercial' %}selected{% endif %}>Commercial</option>
+            <option value="Procedural" {% if req.requirement_type == 'Procedural' %}selected{% endif %}>Procedural</option>
+        </select>
     </td>
     <td style="text-align: center;" data-label="Mandatory">
         <input type="checkbox" name="mandatory" value="true" {% if req.mandatory %}checked{% endif %} style="cursor: pointer; width: 16px; height: 16px;">

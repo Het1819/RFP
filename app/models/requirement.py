@@ -12,10 +12,12 @@ class Requirement(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("proposal_projects.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("proposal_projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(
-        ForeignKey("documents.id", ondelete="SET NULL"), nullable=True
+        ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True
     )
     original_text: Mapped[str] = mapped_column(Text, nullable=False)
     source_section: Mapped[str | None] = mapped_column(String(100), nullable=True)

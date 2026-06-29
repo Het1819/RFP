@@ -76,17 +76,27 @@ def _extract_pdf(file_path: Path) -> list[dict[str, Any]]:
 
 def _extract_docx(file_path: Path) -> list[dict[str, Any]]:
     doc = docx.Document(str(file_path))
-    paragraphs = []
+    parts: list[str] = []
     for p in doc.paragraphs:
         if p.text.strip():
-            paragraphs.append(p.text)
-
-    # Simple table extraction
+            parts.append(p.text)
     for table in doc.tables:
         for row in table.rows:
             row_texts = [cell.text.strip() for cell in row.cells if cell.text.strip()]
             if row_texts:
-                paragraphs.append(" | ".join(row_texts))
+                parts.append(" | ".join(row_texts))
 
-    full_text = "\n".join(paragraphs)
-    return [{"page_number": 1, "content": full_text}]
+    chunk_words: list[str] = []
+    chunks: list[str] = []
+    for part in parts:
+        words = part.split()
+        chunk_words.extend(words)
+        if len(chunk_words) >= 500:
+            chunks.append(" ".join(chunk_words))
+            chunk_words = []
+    if chunk_words:
+        chunks.append(" ".join(chunk_words))
+
+    if not chunks:
+        return [{"page_number": 1, "content": ""}]
+    return [{"page_number": i + 1, "content": text} for i, text in enumerate(chunks)]

@@ -65,6 +65,12 @@
                 <span class="badge" style="background: var(--status-needs-evidence-bg); border-color: rgba(180, 35, 24, 0.3); color: var(--status-needs-evidence); font-size: 0.8rem;">FAILED</span>
             </div>
             
+            {% if document.processing_error %}
+            <div style="background: var(--status-needs-evidence-bg); border: 1px solid rgba(180, 35, 24, 0.3); color: var(--status-needs-evidence); padding: 1rem; border-radius: 8px; font-size: 0.9rem; line-height: 1.5; word-break: break-word;">
+                <strong>Error Details:</strong> {{ document.processing_error }}
+            </div>
+            {% endif %}
+            
             <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">Please ensure the document contains extractable text layers and is not corrupted, then retry upload below.</p>
             
             <form action="/projects/{{ project.id }}/upload" method="POST" enctype="multipart/form-data" style="display: flex; flex-direction: column; gap: 1.25rem;">

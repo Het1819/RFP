@@ -145,7 +145,7 @@
                         </h3>
 
                         <form method="GET" action="/requirements/{{ req.id }}/workspace" style="display: flex; gap: 0.5rem; margin-bottom: 1.25rem;">
-                            <input type="text" name="q" value="{{ q_query or req.original_text }}" placeholder="Search query..." class="form-control">
+                            <input type="text" name="q" value="{{ search_query }}" placeholder="Search query..." class="form-control">
                             <button type="submit" class="btn btn-primary" style="padding: 0.6rem 1.5rem; font-size: 0.9rem;">Search</button>
                         </form>
 

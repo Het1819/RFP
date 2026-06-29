@@ -48,7 +48,7 @@ def test_matrix_view_and_edit_flow(client, db):
         "original_text": "Updated Requirement text",
         "source_section": "Sec 1.2",
         "source_page": 2,
-        "requirement_type": "Security",
+        "requirement_type": "Compliance",
         "mandatory": "true",
         "status": "NEEDS_EVIDENCE",
         "owner_name": "Tony Stark",

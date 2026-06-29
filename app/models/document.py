@@ -12,7 +12,9 @@ class Document(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     project_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("proposal_projects.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("proposal_projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_path: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -22,6 +24,7 @@ class Document(Base):
     processing_status: Mapped[str] = mapped_column(
         String(50), default="pending", nullable=False
     )
+    processing_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     owner_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     tags: Mapped[str | None] = mapped_column(Text, nullable=True)
     approval_status: Mapped[str] = mapped_column(
@@ -58,7 +61,7 @@ class DocumentPage(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(
-        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+        ForeignKey("documents.id", ondelete="CASCADE"), nullable=False, index=True
     )
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
