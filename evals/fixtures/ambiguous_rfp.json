@@ -1,0 +1,47 @@
+{
+  "name": "Ambiguous & Duplicate RFP",
+  "source_text": "[PAGE 1] Section 2.1: Platform Requirements\nThe database must run on PostgreSQL version 16.\n[PAGE 2] Section 2.5: Database Version\nFor data persistence, the system must utilize PostgreSQL 16.\nThe system shall support standard full-text search.",
+  "expected_requirements": [
+    {
+      "original_text": "The database must run on PostgreSQL version 16.",
+      "source_section": "Section 2.1",
+      "source_page": 1,
+      "requirement_type": "Technical",
+      "mandatory": true,
+      "risk_level": "Medium"
+    },
+    {
+      "original_text": "For data persistence, the system must utilize PostgreSQL 16.",
+      "source_section": "Section 2.5",
+      "source_page": 2,
+      "requirement_type": "Technical",
+      "mandatory": true,
+      "risk_level": "Medium"
+    },
+    {
+      "original_text": "The system shall support standard full-text search.",
+      "source_section": "Section 2.5",
+      "source_page": 2,
+      "requirement_type": "Technical",
+      "mandatory": true,
+      "risk_level": "Medium"
+    }
+  ],
+  "evidence_snippets": [
+    {
+      "doc_name": "Database Architecture",
+      "page_number": 1,
+      "snippet": "The architecture utilizes PostgreSQL 16 as the primary relational database."
+    }
+  ],
+  "expected_drafts": {
+    "The database must run on PostgreSQL version 16.": {
+      "needs_evidence": false,
+      "answer_contains": "PostgreSQL 16"
+    },
+    "The system shall support standard full-text search.": {
+      "needs_evidence": true,
+      "answer_text": "NEEDS_EVIDENCE"
+    }
+  }
+}

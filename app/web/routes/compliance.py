@@ -1,19 +1,43 @@
+import logging
 import uuid
 from enum import StrEnum
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BeforeValidator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import security as core_security
+from app.core.config import settings
+from app.core.csrf import validate_csrf_token
 from app.core.database import get_db, get_default_org_and_user
-from app.models.project import ProposalProject
+from app.core.security import (
+    get_document_for_org,
+    get_project_for_org,
+    get_requirement_for_org,
+)
+from app.core.templates import templates
 from app.models.requirement import Requirement
 from app.services.project_service import log_audit_event
+
+logger = logging.getLogger(__name__)
+
+
+def get_current_org_and_user(
+    request: Request, db: Session
+) -> tuple[uuid.UUID, uuid.UUID]:
+    try:
+        return core_security.get_current_org_and_user(request, db)
+    except HTTPException as e:
+        if e.status_code == 401 and settings.AUTH_MODE == "dev":
+            core_security.check_app_env_auth()
+            logger.warning(
+                "Development authentication active. Falling back to default user/org."
+            )
+            return get_default_org_and_user(db)
+        raise
 
 
 class RequirementStatus(StrEnum):
@@ -51,30 +75,16 @@ OptionalRiskLevel = Annotated[RiskLevel | None, BeforeValidator(empty_to_none)]
 
 router = APIRouter(tags=["compliance"])
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-
-def get_requirement_for_org(
-    db: Session, requirement_id: uuid.UUID, org_id: uuid.UUID
-) -> Requirement:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-    project = db.get(ProposalProject, req.project_id)
-    if not project or project.organization_id != org_id:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-    return req
+# get_requirement_for_org is imported from app.core.security
 
 
 @router.get("/projects/{project_id}/matrix", response_class=HTMLResponse)
 def matrix_view(
     request: Request, project_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
-    project = db.get(ProposalProject, project_id)
-    if not project or project.organization_id != org_id:
-        raise HTTPException(status_code=404, detail="Project not found")
+    org_id, _ = get_current_org_and_user(request, db)
+    project = get_project_for_org(db, project_id, org_id)
 
     requirements = db.scalars(
         select(Requirement)
@@ -99,7 +109,7 @@ def matrix_view(
 def edit_requirement_row(
     request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
+    org_id, _ = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
     return templates.TemplateResponse(
         request=request,
@@ -108,7 +118,11 @@ def edit_requirement_row(
     )
 
 
-@router.post("/requirements/{requirement_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/requirements/{requirement_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def update_requirement_action(
     request: Request,
     requirement_id: uuid.UUID,
@@ -123,7 +137,7 @@ def update_requirement_action(
     risk_level: OptionalRiskLevel = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     old_details = {
@@ -171,7 +185,7 @@ def update_requirement_action(
 def cancel_edit_row(
     request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
+    org_id, _ = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
     return templates.TemplateResponse(
         request=request,
@@ -180,11 +194,15 @@ def cancel_edit_row(
     )
 
 
-@router.delete("/requirements/{requirement_id}", response_class=HTMLResponse)
+@router.delete(
+    "/requirements/{requirement_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def delete_requirement_action(
-    requirement_id: uuid.UUID, db: Session = Depends(get_db)
+    request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
     db.delete(req)
     db.commit()
@@ -202,9 +220,14 @@ def delete_requirement_action(
     return HTMLResponse(content="")
 
 
-@router.post("/projects/{project_id}/matrix/merge", response_class=RedirectResponse)
+@router.post(
+    "/projects/{project_id}/matrix/merge",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def merge_requirements_action(
     project_id: uuid.UUID,
+    request: Request,
     ids: list[str] = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
@@ -215,12 +238,18 @@ def merge_requirements_action(
             status_code=303,
         )
 
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
+    project = get_project_for_org(db, project_id, org_id)
     req_ids = [uuid.UUID(i) for i in ids]
 
-    reqs = db.scalars(select(Requirement).where(Requirement.id.in_(req_ids))).all()
+    reqs = db.scalars(
+        select(Requirement).where(
+            Requirement.id.in_(req_ids),
+            Requirement.project_id == project.id,
+        )
+    ).all()
 
-    if not reqs:
+    if len(reqs) != len(req_ids):
         raise HTTPException(status_code=404, detail="No requirements found")
 
     merged_text = "\n[Merged] ".join([r.original_text for r in reqs])
@@ -246,13 +275,18 @@ def merge_requirements_action(
     return RedirectResponse(url=f"/projects/{project_id}/matrix", status_code=303)
 
 
-@router.post("/requirements/{requirement_id}/split", response_class=RedirectResponse)
+@router.post(
+    "/requirements/{requirement_id}/split",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def split_requirement_action(
     requirement_id: uuid.UUID,
+    request: Request,
     split_text: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     secondary = Requirement(
@@ -291,9 +325,9 @@ def split_requirement_action(
 def requirement_workspace_view(
     request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
+    org_id, _ = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
-    project = db.get(ProposalProject, req.project_id)
+    project = get_project_for_org(db, req.project_id, org_id)
 
     # Run retrieval
     from app.services.retriever import retrieve_evidence
@@ -338,17 +372,76 @@ def requirement_workspace_view(
 @router.post(
     "/requirements/{requirement_id}/evidence/link",
     response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
 )
 def link_evidence_action(
     requirement_id: uuid.UUID,
+    request: Request,
     document_id: uuid.UUID = Form(...),
     snippet: str = Form(...),
     page_number: int = Form(None),
     score: float = Form(0.0),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
-    _ = get_requirement_for_org(db, requirement_id, org_id)
+    org_id, user_id = get_current_org_and_user(request, db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
+    doc = get_document_for_org(db, document_id, org_id)
+
+    # Enforce document belongs to same project as requirement
+    if doc.project_id != req.project_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Document belongs to a different project",
+        )
+
+    # Enforce document status and eligibility
+    if doc.processing_status != "completed":
+        raise HTTPException(status_code=400, detail="Document is not fully processed")
+    if doc.doc_role == "knowledge_base" and doc.approval_status != "APPROVED":
+        raise HTTPException(status_code=400, detail="Document is not approved")
+
+    # Validate page_number if provided
+    if page_number is not None:
+        from app.models.document import DocumentPage
+
+        page_exists = db.scalar(
+            select(DocumentPage).where(
+                DocumentPage.document_id == document_id,
+                DocumentPage.page_number == page_number,
+            )
+        )
+        if not page_exists:
+            raise HTTPException(
+                status_code=400,
+                detail="Page number does not exist for this document",
+            )
+
+        # Verify snippet is within the page's content
+        page = db.scalars(
+            select(DocumentPage).where(
+                DocumentPage.document_id == document_id,
+                DocumentPage.page_number == page_number,
+            )
+        ).first()
+        doc_content = page.content if page else ""
+    else:
+        doc_content = doc.content or ""
+
+    # Do not trust client-supplied score blindly; clamp between 0.0 and 1.0
+    score = max(0.0, min(1.0, float(score)))
+
+    # Do not allow arbitrary fabricated snippets:
+    # check if normalized snippet is in normalized document/page content
+    import re
+
+    def normalize(t: str) -> str:
+        return re.sub(r"\s+", " ", t).strip().lower()
+
+    if normalize(snippet) not in normalize(doc_content):
+        raise HTTPException(
+            status_code=400,
+            detail="Evidence snippet not found in document content",
+        )
 
     from app.models.evidence import EvidenceLink
 
@@ -380,12 +473,17 @@ def link_evidence_action(
     )
 
 
-@router.post("/requirements/{requirement_id}/draft", response_class=RedirectResponse)
+@router.post(
+    "/requirements/{requirement_id}/draft",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 async def draft_requirement_response(
     requirement_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.evidence import EvidenceLink
@@ -458,14 +556,17 @@ async def draft_requirement_response(
 
 
 @router.post(
-    "/requirements/{requirement_id}/draft/edit", response_class=RedirectResponse
+    "/requirements/{requirement_id}/draft/edit",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
 )
 def edit_draft_response(
     requirement_id: uuid.UUID,
+    request: Request,
     content: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.response import DraftResponse
@@ -478,8 +579,6 @@ def edit_draft_response(
 
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
-
-    org_id, user_id = get_default_org_and_user(db)
 
     draft.content = content
     req.status = "DRAFTED"
@@ -501,13 +600,16 @@ def edit_draft_response(
 
 
 @router.post(
-    "/requirements/{requirement_id}/draft/approve", response_class=RedirectResponse
+    "/requirements/{requirement_id}/draft/approve",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
 )
 def approve_draft_response(
     requirement_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.response import DraftResponse
@@ -520,8 +622,6 @@ def approve_draft_response(
 
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
-
-    org_id, user_id = get_default_org_and_user(db)
 
     draft.status = "approved"
     draft.approved_by_id = user_id
@@ -544,13 +644,16 @@ def approve_draft_response(
 
 
 @router.post(
-    "/requirements/{requirement_id}/draft/reject", response_class=RedirectResponse
+    "/requirements/{requirement_id}/draft/reject",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
 )
 def reject_draft_response(
     requirement_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.response import DraftResponse
@@ -563,8 +666,6 @@ def reject_draft_response(
 
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
-
-    org_id, user_id = get_default_org_and_user(db)
 
     draft.status = "rejected"
     req.status = "REJECTED"
@@ -588,21 +689,28 @@ def reject_draft_response(
 @router.post(
     "/requirements/{requirement_id}/draft/regenerate",
     response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
 )
 async def regenerate_draft_response(
     requirement_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    return await draft_requirement_response(requirement_id, db)
+    return await draft_requirement_response(requirement_id, request, db)
 
 
-@router.post("/requirements/{requirement_id}/assign", response_class=RedirectResponse)
+@router.post(
+    "/requirements/{requirement_id}/assign",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def assign_requirement_reviewer(
     requirement_id: uuid.UUID,
+    request: Request,
     reviewer_name: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     req.owner_name = reviewer_name
@@ -639,12 +747,11 @@ def assign_requirement_reviewer(
 @router.get("/projects/{project_id}/export/matrix")
 def export_compliance_matrix(
     project_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
-    project = db.get(ProposalProject, project_id)
-    if not project or project.organization_id != org_id:
-        raise HTTPException(status_code=404, detail="Project not found")
+    org_id, _ = get_current_org_and_user(request, db)
+    _ = get_project_for_org(db, project_id, org_id)
 
     requirements = db.scalars(
         select(Requirement)
@@ -708,12 +815,11 @@ def export_compliance_matrix(
 @router.get("/projects/{project_id}/export/proposal")
 def export_proposal_docx(
     project_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
-    project = db.get(ProposalProject, project_id)
-    if not project or project.organization_id != org_id:
-        raise HTTPException(status_code=404, detail="Project not found")
+    org_id, _ = get_current_org_and_user(request, db)
+    project = get_project_for_org(db, project_id, org_id)
 
     from app.models.response import DraftResponse
 

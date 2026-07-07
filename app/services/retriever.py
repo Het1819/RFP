@@ -17,7 +17,8 @@ def retrieve_evidence(
     if not clean_query:
         return []
 
-    # Remove only chars that break plainto_tsquery; preserve hyphens, dots, parens, colons
+    # Remove only chars that break plainto_tsquery;
+    # preserve hyphens, dots, parens, colons
     clean_query = re.sub(r"[\'\\]", "", clean_query).strip()
     if not clean_query:
         return []

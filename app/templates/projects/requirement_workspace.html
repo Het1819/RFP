@@ -57,6 +57,7 @@
             </div>
             <nav style="display: flex; align-items: center; gap: 1rem;">
                 <a href="/projects/{{ project.id }}/matrix" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Compliance Matrix</a>
+                <a href="/logout" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Sign Out</a>
                 <span class="badge">MVP v0.1.0</span>
             </nav>
         </header>
@@ -163,6 +164,7 @@
                                             <span class="badge" style="font-size: 0.7rem; background: var(--status-drafted-bg); border-color: var(--border-color); color: var(--status-drafted); margin-right: auto; margin-left: 0.5rem;">Score: {{ "%.2f"|format(passage.score) }}</span>
                                             
                                             <form action="/requirements/{{ req.id }}/evidence/link" method="POST">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                                 <input type="hidden" name="document_id" value="{{ passage.doc_id }}">
                                                 <input type="hidden" name="snippet" value="{{ passage.snippet }}">
                                                 <input type="hidden" name="page_number" value="{{ passage.page_number or '' }}">
@@ -193,11 +195,13 @@
                             <div style="text-align: center; padding: 2rem 1rem;">
                                 <p style="color: var(--text-secondary); font-size: 0.95rem; margin-bottom: 1.25rem; line-height: 1.5;">No draft answer has been generated or written yet. Click below to draft a source-backed response utilizing linked evidence passages.</p>
                                 <form action="/requirements/{{ req.id }}/draft" method="POST">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                     <button type="submit" class="btn btn-primary" style="padding: 0.75rem 2rem;">Draft Answer (AI / Fallback)</button>
                                 </form>
                             </div>
                         {% else %}
                             <form action="/requirements/{{ req.id }}/draft/edit" method="POST" style="display: flex; flex-direction: column; gap: 1rem;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                 <!-- Answer text field -->
                                 <div style="display: flex; flex-direction: column; gap: 0.35rem;">
                                     <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-secondary);">Answer Text</label>
@@ -231,13 +235,16 @@
                             <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
                                 <div style="display: flex; gap: 0.5rem;">
                                     <form action="/requirements/{{ req.id }}/draft/approve" method="POST">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                         <button type="submit" class="btn btn-primary" style="background: var(--status-approved); box-shadow: none; padding: 0.5rem 1.25rem; font-size: 0.85rem;" onmouseover="this.style.background='#126a4b'" onmouseout="this.style.background='var(--status-approved)'">Approve Answer</button>
                                     </form>
                                     <form action="/requirements/{{ req.id }}/draft/reject" method="POST">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                         <button type="submit" class="btn btn-secondary" style="border-color: rgba(180, 35, 24, 0.2); color: var(--status-needs-evidence); padding: 0.5rem 1.25rem; font-size: 0.85rem;">Reject Answer</button>
                                     </form>
                                 </div>
                                 <form action="/requirements/{{ req.id }}/draft/regenerate" method="POST">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                     <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.85rem;">Regenerate</button>
                                 </form>
                             </div>
@@ -246,6 +253,7 @@
                             <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
                                 <h4 style="font-size: 0.95rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.75rem;">Route Gap to Reviewer</h4>
                                 <form action="/requirements/{{ req.id }}/assign" method="POST" style="display: flex; gap: 0.5rem;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                     <input type="text" name="reviewer_name" required placeholder="Enter reviewer name..." class="form-control" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;">
                                     <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1.25rem; font-size: 0.85rem; flex-shrink: 0;">Assign</button>
                                 </form>

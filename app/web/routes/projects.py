@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -14,24 +15,42 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import security as core_security
 from app.core.config import settings
+from app.core.csrf import validate_csrf_token
 from app.core.database import get_db, get_default_org_and_user
+from app.core.security import get_project_for_org
+from app.core.templates import templates
 from app.models.document import Document
 from app.services import project_service
 
-router = APIRouter(prefix="/projects", tags=["projects"])
+logger = logging.getLogger(__name__)
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+def get_current_org_and_user(
+    request: Request, db: Session
+) -> tuple[uuid.UUID, uuid.UUID]:
+    try:
+        return core_security.get_current_org_and_user(request, db)
+    except HTTPException as e:
+        if e.status_code == 401 and settings.AUTH_MODE == "dev":
+            core_security.check_app_env_auth()
+            logger.warning(
+                "Development authentication active. Falling back to default user/org."
+            )
+            return get_default_org_and_user(db)
+        raise
+
+
+router = APIRouter(prefix="/projects", tags=["projects"])
 
 
 @router.get("", response_class=HTMLResponse)
 def list_projects_view(request: Request, db: Session = Depends(get_db)) -> Any:
-    org_id, _ = get_default_org_and_user(db)
+    org_id, _ = get_current_org_and_user(request, db)
     projects_list = project_service.get_projects(db, org_id)
     return templates.TemplateResponse(
         request=request,
@@ -40,14 +59,17 @@ def list_projects_view(request: Request, db: Session = Depends(get_db)) -> Any:
     )
 
 
-@router.post("", response_class=RedirectResponse)
+@router.post(
+    "", response_class=RedirectResponse, dependencies=[Depends(validate_csrf_token)]
+)
 def create_project_action(
+    request: Request,
     name: str = Form(...),
     client_name: str = Form(...),
     due_date: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
 
     parsed_due_date = None
     if due_date:
@@ -70,10 +92,8 @@ def create_project_action(
 def project_detail_view(
     request: Request, project_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
-    project = project_service.get_project(db, project_id, org_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    org_id, _ = get_current_org_and_user(request, db)
+    project = get_project_for_org(db, project_id, org_id)
 
     doc = project_service.get_project_document(db, project.id)
     error_msg = request.query_params.get("error")
@@ -97,14 +117,19 @@ def project_detail_view(
     )
 
 
-@router.post("/{project_id}/upload", response_class=RedirectResponse)
+@router.post(
+    "/{project_id}/upload",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def upload_rfp_action(
+    request: Request,
     project_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     try:
         project_service.upload_rfp_document(
             db, project_id, org_id, user_id, file, background_tasks
@@ -127,10 +152,8 @@ def upload_rfp_action(
 def project_document_status_partial(
     request: Request, project_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
-    project = project_service.get_project(db, project_id, org_id)
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
+    org_id, _ = get_current_org_and_user(request, db)
+    project = get_project_for_org(db, project_id, org_id)
 
     doc = project_service.get_project_document(db, project.id)
     return templates.TemplateResponse(
@@ -140,8 +163,13 @@ def project_document_status_partial(
     )
 
 
-@router.post("/{project_id}/knowledge", response_class=RedirectResponse)
+@router.post(
+    "/{project_id}/knowledge",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def upload_knowledge_action(
+    request: Request,
     project_id: uuid.UUID,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -152,7 +180,7 @@ def upload_knowledge_action(
     review_date: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
 
     parsed_review_date = None
     if review_date:
@@ -161,9 +189,7 @@ def upload_knowledge_action(
         except ValueError:
             pass
 
-    proj = project_service.get_project(db, project_id, org_id)
-    if not proj:
-        raise HTTPException(status_code=404, detail="Project not found")
+    _ = get_project_for_org(db, project_id, org_id)
 
     from app.services.extractor import validate_uploaded_file
 

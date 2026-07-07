@@ -1,0 +1,116 @@
+import logging
+import uuid
+from typing import Any
+
+from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.csrf import validate_csrf_token
+from app.core.database import get_db
+from app.core.templates import templates
+from app.models.organization import Organization
+from app.models.user import User
+
+logger = logging.getLogger(__name__)
+router = APIRouter(tags=["auth"])
+
+
+@router.get("/login", response_class=HTMLResponse)
+def login_view(request: Request) -> Any:
+    # If already logged in, redirect to workspace
+    if request.session.get("user_id") and request.session.get("org_id"):
+        return RedirectResponse(url="/projects", status_code=303)
+    error_msg = request.query_params.get("error")
+    return templates.TemplateResponse(
+        request=request,
+        name="login.html",
+        context={"auth_mode": settings.AUTH_MODE, "error_msg": error_msg},
+    )
+
+
+@router.post(
+    "/login",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
+def login_action(
+    request: Request,
+    email: str = Form(None),
+    db: Session = Depends(get_db),
+) -> Any:
+    if settings.AUTH_MODE == "dev":
+        # Dev mode allows selecting/creating user
+        if not email:
+            email = "default@rfparchitect.com"
+
+        # Look up or create organization
+        org = db.scalars(select(Organization).limit(1)).first()
+        if not org:
+            org = Organization(
+                id=uuid.UUID("00000000-0000-0000-0000-000000000001"),
+                name="Default Org",
+            )
+            db.add(org)
+            db.commit()
+            db.refresh(org)
+
+        # Look up or create user
+        user = db.scalars(select(User).where(User.email == email)).first()
+        if not user:
+            user = User(
+                id=(
+                    uuid.UUID("00000000-0000-0000-0000-000000000002")
+                    if email == "default@rfparchitect.com"
+                    else uuid.uuid4()
+                ),
+                organization_id=org.id,
+                email=email,
+                hashed_password="fake-pbkdf2-sha256-hash-for-now",
+                full_name="Workspace User",
+                is_active=True,
+            )
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+        request.session["user_id"] = str(user.id)
+        request.session["org_id"] = str(org.id)
+        logger.warning(f"Development login successful for {email}")
+        return RedirectResponse(url="/projects", status_code=303)
+
+    elif settings.AUTH_MODE == "session":
+        if not email:
+            return RedirectResponse(
+                url="/login?error=Email is required", status_code=303
+            )
+
+        user = db.scalars(select(User).where(User.email == email)).first()
+        if not user or not user.is_active:
+            return RedirectResponse(
+                url="/login?error=Invalid email or account deactivated",
+                status_code=303,
+            )
+
+        request.session["user_id"] = str(user.id)
+        request.session["org_id"] = str(user.organization_id)
+        return RedirectResponse(url="/projects", status_code=303)
+
+    elif settings.AUTH_MODE == "oidc":
+        # OIDC not implemented safe response
+        raise HTTPException(
+            status_code=501,
+            detail="OIDC Authentication is not fully configured or implemented",
+        )
+
+    return RedirectResponse(url="/login", status_code=303)
+
+
+@router.get("/logout", response_class=RedirectResponse)
+@router.post("/logout", response_class=RedirectResponse)
+def logout_action(request: Request) -> Any:
+    # Clear session values (clears user_id, org_id, and csrf_token)
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)

@@ -1,0 +1,47 @@
+{
+  "name": "Simple RFP",
+  "source_text": "[PAGE 1] Section 1.1: Security Requirements\nThe system must support multi-factor authentication (MFA) for all users.\nThe vendor shall provide 24/7 technical support.\nThe response time for critical issues should be under 2 hours.",
+  "expected_requirements": [
+    {
+      "original_text": "The system must support multi-factor authentication (MFA) for all users.",
+      "source_section": "Section 1.1",
+      "source_page": 1,
+      "requirement_type": "Technical",
+      "mandatory": true,
+      "risk_level": "Medium"
+    },
+    {
+      "original_text": "The vendor shall provide 24/7 technical support.",
+      "source_section": "Section 1.1",
+      "source_page": 1,
+      "requirement_type": "Technical",
+      "mandatory": true,
+      "risk_level": "Medium"
+    },
+    {
+      "original_text": "The response time for critical issues should be under 2 hours.",
+      "source_section": "Section 1.1",
+      "source_page": 1,
+      "requirement_type": "Technical",
+      "mandatory": false,
+      "risk_level": "Medium"
+    }
+  ],
+  "evidence_snippets": [
+    {
+      "doc_name": "Security Policy",
+      "page_number": 3,
+      "snippet": "Our platform enforces multi-factor authentication (MFA) across all user accounts."
+    }
+  ],
+  "expected_drafts": {
+    "The system must support multi-factor authentication (MFA) for all users.": {
+      "needs_evidence": false,
+      "answer_contains": "multi-factor authentication"
+    },
+    "The vendor shall provide 24/7 technical support.": {
+      "needs_evidence": true,
+      "answer_text": "NEEDS_EVIDENCE"
+    }
+  }
+}

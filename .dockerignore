@@ -1,0 +1,22 @@
+.git
+.venv
+__pycache__
+.pytest_cache
+.mypy_cache
+.ruff_cache
+node_modules
+local uploads/storage artifacts
+data
+.env
+.env.example
+*.pyc
+*.pyo
+*.pyd
+.db
+*.db
+.mcp.json
+.agents
+.claude
+PILOT_HARDENING_BASELINE.md
+DEPLOYMENT.md
+tests

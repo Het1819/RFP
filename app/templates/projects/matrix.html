@@ -37,6 +37,12 @@
                         <span>Landing Page</span>
                     </a>
                 </li>
+                <li>
+                    <a href="/logout" class="sidebar-link">
+                        <span style="font-size: 1.1rem;">🚪</span>
+                        <span>Sign Out</span>
+                    </a>
+                </li>
             </ul>
             
             <div style="margin-top: auto; padding-top: var(--space-md); border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: var(--space-xs);">
@@ -118,6 +124,7 @@
                 {% else %}
                 <!-- Sticky Table Container -->
                 <form action="/projects/{{ project.id }}/matrix/merge" method="POST" id="matrix-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                     <div class="table-scroll-container">
                         <table class="matrix-table">
                             <thead>
@@ -155,6 +162,7 @@
             </div>
             
             <form id="split-form" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                 <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1.25rem; line-height: 1.6;">
                     Enter the exact text block to isolate into a separate requirement entry. The segment will be automatically removed from the original requirement text.
                 </p>
