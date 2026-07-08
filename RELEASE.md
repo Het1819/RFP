@@ -47,25 +47,42 @@ Releases are triggered automatically when a tag matching the pattern `pilot-hard
 
 ---
 
-## 4. Rollback and Recovery Guidance
+## 4. Final Release Validation
+
+Before submitting a pull request to merge a hardening branch, developers must run the automated final validation script. This ensures all linting, formatting, type checking, unit/integration tests, and Docker compose configurations pass cleanly.
+
+### Running Validation:
+```powershell
+# Run validation on Windows PowerShell (skips docker build for speed if desired)
+powershell -ExecutionPolicy Bypass -File scripts/final_release_validation.ps1 -SkipDockerBuild
+
+# Run validation on Bash
+./scripts/final_release_validation.sh --skip-docker-build
+```
+
+---
+
+## 5. Rollback and Recovery Guidance
 
 If a production/pilot deployment experiences severe failure, roll back to a previously tagged stable commit.
 
 ### Deployment Rollback
 Identify the last stable pilot release tag:
-- **`pilot-hardening-step8`**: Stables evidence validation, citation provenance, and snippet grounding.
-- **`pilot-hardening-step9`**: Stables human review workflow, review task routing, and DOCX export approval gates.
-- **`pilot-hardening-step10`**: Stables queue-backed asynchronous processing, Redis worker, and retry reliability.
 - **`pilot-hardening-step11`**: Stables logging correlation, Prometheus metrics, and Pilot KPI dashboard.
 - **`pilot-hardening-step12`**: Stables CI/CD validation, supply chain scanning, and local check helpers.
 - **`pilot-hardening-step13`**: Stables staging deployment rehearsal, smoke tests, rollback drills, and pilot readiness checklist.
+- **`pilot-hardening-step14`**: Stables pilot onboarding materials, feedback capture routes, and exit criteria.
+- **`pilot-hardening-step15`**: Stables commercial package, pricing scorecard, objection guide, and conversion criteria.
+- **`pilot-hardening-step16`**: Stables outreach sales templates, CRM stages, and email sequences.
+- **`pilot-hardening-step17`**: Stables first-campaign account trackers, research worksheets, meeting evidence capture, and weekly reporting templates.
 
 To roll back, deploy the corresponding container image tag or check out the tag locally and rebuild:
 ```bash
-git checkout pilot-hardening-step12
+git checkout pilot-hardening-step17
 docker build -t rfp-architect-mvp:pilot .
 # Redeploy containers
 ```
 
 For comprehensive step-by-step procedures regarding database schema downgrades, asset preservation, and incident response, consult the [RUNBOOK.md](file:///D:/RFA/Project/rfp-architect-mvp/RUNBOOK.md).
+
 

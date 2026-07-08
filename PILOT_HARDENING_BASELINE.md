@@ -785,6 +785,56 @@ The next step is **Step 3 (CSRF Protection)**:
 ### Remaining Gaps for Step 18
 * None. Step 17 is complete.
 
+---
+
+## 23. Step 18 - PR and Release Review Readiness
+
+### Files Changed
+- [RELEASE.md](file:///D:/RFA/Project/rfp-architect-mvp/RELEASE.md) (updated rollback release tags and final validation script details).
+- [PILOT_READINESS_CHECKLIST.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_READINESS_CHECKLIST.md) (appended Step 18 release checklist).
+
+### PR/Release Artifacts Added
+- [PR_DESCRIPTION_HARDENING_BRANCH.md](file:///D:/RFA/Project/rfp-architect-mvp/PR_DESCRIPTION_HARDENING_BRANCH.md) (PR template summarizing features from Steps 2 through 17).
+- [FINAL_RELEASE_CHECKLIST.md](file:///D:/RFA/Project/rfp-architect-mvp/FINAL_RELEASE_CHECKLIST.md) (release checklist for git/CI status, auth, CSRF, isolation, grounding, backups, and campaign readiness).
+- [PILOT_RISK_REGISTER.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_RISK_REGISTER.md) (complete risk log mapping out severity, mitigation, and residual risk decisions).
+- [REVIEWER_GUIDE.md](file:///D:/RFA/Project/rfp-architect-mvp/REVIEWER_GUIDE.md) (auditor's instruction guide with recommended files and local test instructions).
+- [MERGE_PLAN.md](file:///D:/RFA/Project/rfp-architect-mvp/MERGE_PLAN.md) (safe rebase-and-merge workflow and post-merge version-tagging strategies).
+- [DEPLOYMENT_DECISION_MEMO_TEMPLATE.md](file:///D:/RFA/Project/rfp-architect-mvp/DEPLOYMENT_DECISION_MEMO_TEMPLATE.md) (approver sign-off template accepting/rejecting pilot deployment candidates).
+- [scripts/final_release_validation.ps1](file:///D:/RFA/Project/rfp-architect-mvp/scripts/final_release_validation.ps1) (PowerShell release validation suite).
+- [scripts/final_release_validation.sh](file:///D:/RFA/Project/rfp-architect-mvp/scripts/final_release_validation.sh) (Bash release validation suite).
+- [tests/integration/test_step18_release_readiness.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_step18_release_readiness.py) (integration test suite verifying PR/release files, risk criteria, and safety checks).
+
+### Risk Register
+* Fully tracks all 15 operational, security, AI quality, and business risks (hallucination, exposure, backup, queue, WTP, data, and compliance claims) alongside mitigations and decisions.
+
+### Reviewer Guide
+* Identifies file inspection priorities for auth, CSRF, database migrations, and telemetry log auditing.
+
+### Merge Plan
+* Recommends linear git rebase strategies, outlines conflict resolution steps for Alembic migrations, and mandates no automatic push/merge hooks.
+
+### Validation Scripts
+* Provide fast-failing checks (ruff, mypy, pytest, assets, tsc, evals, compose) with no git add, git commit, git tag, or git push side effects.
+
+### Tests Added
+* Integration tests verify all 8 files/scripts are present, do not contain real keys, validate required risks, check checklist items, and verify that no automated git mutations exist in the validation scripts.
+
+### Checks/Tests Results
+* `pytest -q`: PASS (184 tests passed).
+* `ruff check .`: PASS.
+* `ruff format --check .`: PASS.
+* `mypy app`: PASS.
+* `npm run assets:build`: PASS.
+* `npx tsc --noEmit`: PASS.
+* `scripts/run_ai_eval.py --offline`: PASS.
+* `docker compose -f docker-compose.prod.yml config`: PASS.
+* `docker build -t rfp-architect-mvp:pilot .`: PASS.
+* `powershell -ExecutionPolicy Bypass -File scripts/final_release_validation.ps1 -SkipDockerBuild`: PASS.
+
+### Remaining Gaps for Step 19
+* None. Step 18 is complete.
+
+
 
 
 

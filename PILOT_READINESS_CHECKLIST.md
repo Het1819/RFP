@@ -120,6 +120,7 @@ The following matrix must be signed off by the team before launching the pilot:
 | **Commercial** | Paid Conversion Docs | Qualification, pricing, ROI, scripts defined | Verified | PASS |
 | **Sales Ops** | Outreach System | Templates, sequences, scorecards, pipeline defined | Verified | PASS |
 | **Campaign** | Launch Campaign | Account tracker, QA checks, learning logs defined | Verified | PASS |
+| **Release** | PR & Release Package | PR template, risk register, reviewer guide defined | Verified | PASS |
 
 ---
 
@@ -157,6 +158,19 @@ The following matrix must be signed off by the team before launching the pilot:
 - [ ] **Weekly Campaign Reports:** Maintain weekly performance metrics, segment learning logs, and action items.
 - [ ] **Win/Loss Log:** Audit outcomes and pricing/security reactions in `WIN_LOSS_LEARNING_LOG.csv`.
 - [ ] **Customer Proof Integrity:** Confirm the proof repository enforces written permission requirements and forbids fake reviews.
+
+---
+
+## 21. Step 18 - PR and Release Review Readiness Checklist
+
+- [ ] **PR Description:** Verify `PR_DESCRIPTION_HARDENING_BRANCH.md` describes security, AI, and container updates.
+- [ ] **Final Release Checklist:** Execute `FINAL_RELEASE_CHECKLIST.md` items before merging.
+- [ ] **Risk Register Audit:** Review all 15 operational/security/business risks logged in `PILOT_RISK_REGISTER.md`.
+- [ ] **Reviewer Guide Walkthrough:** Audit key directories and run local test validation commands.
+- [ ] **Merge & Downgrade Plan:** Check Alembic downgrade paths and rebase merge guidelines.
+- [ ] **Deployment Decision Memo:** Complete the approver template prior to pilot environment staging.
+- [ ] **Final Validation Script:** Confirm `final_release_validation.ps1` runs clean on all gates.
+
 
 
 
