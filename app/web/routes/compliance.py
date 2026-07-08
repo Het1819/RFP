@@ -483,6 +483,10 @@ def link_evidence_action(
             client_snippet=snippet,
         )
     except EvidenceValidationError as exc:
+        from app.core.observability import MetricsRegistry
+
+        MetricsRegistry.evidence_validation_failures += 1
+        logger.warning(f"Evidence validation failed: {exc.detail}")
         raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
     # Client-submitted score is NEVER stored; default 0.0 (retriever sets real scores)
@@ -708,6 +712,9 @@ def approve_draft_response(
     grounding = validate_draft_grounding(draft.content, evidence_snippets)
 
     if not grounding.passes and evidence_snippets:
+        from app.core.observability import MetricsRegistry
+
+        MetricsRegistry.evidence_validation_failures += 1
         # Draft has unsupported claims — route to NEEDS_REVIEW instead of APPROVED
         draft.status = "needs_review"
         req.status = "NEEDS_REVIEW"
@@ -1174,8 +1181,18 @@ def export_compliance_matrix(
     request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, _ = get_current_org_and_user(request, db)
+    org_id, user_id = get_current_org_and_user(request, db)
     _ = get_project_for_org(db, project_id, org_id)
+
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="EXPORT_COMPLIANCE_MATRIX",
+        entity_type="Project",
+        entity_id=project_id,
+        details={"format": "xlsx"},
+    )
 
     requirements = db.scalars(
         select(Requirement)
@@ -1242,8 +1259,18 @@ def export_proposal_docx(
     request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, _ = get_current_org_and_user(request, db)
+    org_id, user_id = get_current_org_and_user(request, db)
     project = get_project_for_org(db, project_id, org_id)
+
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="EXPORT_PROPOSAL_DOCX",
+        entity_type="Project",
+        entity_id=project_id,
+        details={"format": "docx"},
+    )
 
     from app.models.evidence import EvidenceLink
     from app.models.response import DraftResponse

@@ -18,7 +18,17 @@ async def process_document_task(ctx: Any, job_id_str: str) -> None:
         if not job:
             raise ValueError(f"Job {job_id} not found in database")
 
-        await process_job_pipeline_async(db, job)
+        from app.core.observability import request_id_var
+
+        token = None
+        if job.request_id:
+            token = request_id_var.set(job.request_id)
+
+        try:
+            await process_job_pipeline_async(db, job)
+        finally:
+            if token:
+                request_id_var.reset(token)
     finally:
         db.close()
 

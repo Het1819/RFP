@@ -21,6 +21,8 @@ def create_processing_job(
     job_type: str,
     user_id: uuid.UUID | None,
 ) -> ProcessingJob:
+    from app.core.observability import request_id_var
+
     job = ProcessingJob(
         org_id=org_id,
         project_id=project_id,
@@ -30,6 +32,7 @@ def create_processing_job(
         created_by_user_id=user_id,
         attempts=0,
         max_attempts=settings.JOB_MAX_RETRIES,
+        request_id=request_id_var.get(),
     )
     db.add(job)
     db.commit()

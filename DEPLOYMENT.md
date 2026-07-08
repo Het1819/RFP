@@ -147,3 +147,40 @@ For production/pilot setups:
 1. **HTTPS and Reverse Proxy**: Always configure an external load balancer or reverse proxy (such as Nginx, AWS ALB, or Cloudflare) to terminate SSL/TLS before forwarding requests to the application.
 2. **Backups**: Implement automated daily backups for your PostgreSQL database volume (`postgres_data`) and Redis AOF file (`redis_data`).
 3. **Secrets Management**: Never bake secrets (API keys, credentials, or session keys) into Docker images. Pass them as runtime environment variables.
+
+---
+
+## 10. Backup and Restore Procedures
+
+The workspace includes credential-safe scripts for backing up and restoring the PostgreSQL database.
+
+### Database Backup
+To perform a safe PostgreSQL backup, set the required database environment variables and execute the backup script:
+```bash
+DB_HOST=localhost DB_PORT=5432 DB_USER=postgres DB_NAME=rfp_architect ./scripts/backup_postgres.sh
+```
+This script runs `pg_dump` in custom binary format, generating a timestamped file under `./backups/postgres_backup_<database>_<timestamp>.dump`.
+
+### Database Restore
+To restore from a backup file, set the `BACKUP_FILE` environment variable and run the restore script:
+```bash
+BACKUP_FILE=./backups/postgres_backup_rfp_architect_xxx.dump ./scripts/restore_postgres.sh
+```
+This script cleans the database and safely restores the schema and contents using `pg_restore`.
+
+> [!WARNING]
+> Database restore will clean existing tables. Ensure you have backups before restoring.
+
+---
+
+## 11. Monitoring and KPI Metrics
+
+The application exposes standard Prometheus endpoints and an internal dashboard for pilot operations.
+
+### Prometheus Metrics
+Prometheus text-format metrics are exposed at:
+- **`/metrics`**: Aggregates HTTP request counts, average latencies, LLM call frequencies/costs, and database statistics. Exposes no user PII, document contents, or sensitive fields.
+
+### Operational KPI Dashboard
+A protected web-based dashboard is available at:
+- **`/projects/ops/dashboard`**: Displays project stats, document upload successes/failures, requirement extraction counts, average background processing times, and a list of failed background jobs requiring review. Scoped automatically to the authenticated organization.

@@ -76,9 +76,20 @@ def login_action(
             db.commit()
             db.refresh(user)
 
+        from app.services.project_service import log_audit_event
+
         request.session["user_id"] = str(user.id)
         request.session["org_id"] = str(org.id)
         logger.warning(f"Development login successful for {email}")
+        log_audit_event(
+            db,
+            org_id=org.id,
+            user_id=user.id,
+            action="USER_LOGIN_SUCCESS",
+            entity_type="User",
+            entity_id=user.id,
+            details={"auth_mode": "dev"},
+        )
         return RedirectResponse(url="/projects", status_code=303)
 
     elif settings.AUTH_MODE == "session":
@@ -88,7 +99,19 @@ def login_action(
             )
 
         user = db.scalars(select(User).where(User.email == email)).first()
+        from app.services.project_service import log_audit_event
+
         if not user or not user.is_active:
+            if user:
+                log_audit_event(
+                    db,
+                    org_id=user.organization_id,
+                    user_id=user.id,
+                    action="USER_LOGIN_FAILURE",
+                    entity_type="User",
+                    entity_id=user.id,
+                    details={"reason": "inactive"},
+                )
             return RedirectResponse(
                 url="/login?error=Invalid email or account deactivated",
                 status_code=303,
@@ -96,6 +119,15 @@ def login_action(
 
         request.session["user_id"] = str(user.id)
         request.session["org_id"] = str(user.organization_id)
+        log_audit_event(
+            db,
+            org_id=user.organization_id,
+            user_id=user.id,
+            action="USER_LOGIN_SUCCESS",
+            entity_type="User",
+            entity_id=user.id,
+            details={"auth_mode": "session"},
+        )
         return RedirectResponse(url="/projects", status_code=303)
 
     elif settings.AUTH_MODE == "oidc":
@@ -111,6 +143,30 @@ def login_action(
 @router.get("/logout", response_class=RedirectResponse)
 @router.post("/logout", response_class=RedirectResponse)
 def logout_action(request: Request) -> Any:
+    user_id_str = request.session.get("user_id")
+    org_id_str = request.session.get("org_id")
+
     # Clear session values (clears user_id, org_id, and csrf_token)
     request.session.clear()
+
+    if user_id_str and org_id_str:
+        try:
+            from app.core.database import SessionLocal
+            from app.services.project_service import log_audit_event
+
+            db = SessionLocal()
+            try:
+                log_audit_event(
+                    db,
+                    org_id=uuid.UUID(org_id_str),
+                    user_id=uuid.UUID(user_id_str),
+                    action="USER_LOGOUT",
+                    entity_type="User",
+                    entity_id=uuid.UUID(user_id_str),
+                )
+            finally:
+                db.close()
+        except Exception:
+            pass
+
     return RedirectResponse(url="/login", status_code=303)

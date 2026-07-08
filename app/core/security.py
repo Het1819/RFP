@@ -74,6 +74,25 @@ def get_project_for_org(
     """Retrieve project by ID and verify organization ownership."""
     project = db.get(ProposalProject, project_id)
     if not project or project.organization_id != org_id:
+        if project and project.organization_id != org_id:
+            logger.warning(
+                f"Unauthorized access attempt to project {project_id} "
+                f"by organization {org_id}"
+            )
+            try:
+                from app.services.project_service import log_audit_event
+
+                log_audit_event(
+                    db,
+                    org_id=org_id,
+                    user_id=None,
+                    action="UNAUTHORIZED_ACCESS_ATTEMPT",
+                    entity_type="Project",
+                    entity_id=project_id,
+                    details={"target_org_id": str(project.organization_id)},
+                )
+            except Exception:
+                pass
         raise HTTPException(status_code=404, detail="Project not found")
     return project
 

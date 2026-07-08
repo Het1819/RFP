@@ -220,8 +220,13 @@ def record_llm_telemetry(
         return
 
     latency_ms = int((time.time() - start_time) * 1000)
+    from app.core.observability import MetricsRegistry, request_id_var
+
+    req_id = request_id_var.get() or str(uuid.uuid4())
+    est_cost = estimate_cost(provider, model, input_tokens, output_tokens)
+
     record = {
-        "request_id": str(uuid.uuid4()),
+        "request_id": req_id,
         "provider": provider,
         "model": model,
         "operation": operation,
@@ -231,13 +236,18 @@ def record_llm_telemetry(
         "retry_count": 0,
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
-        "estimated_cost": estimate_cost(provider, model, input_tokens, output_tokens),
+        "estimated_cost": est_cost,
         "fallback_used": fallback_used,
         "truncated_context": truncated_context,
     }
 
-    logger.info("llm_telemetry_event", **record)
+    logger.info("llm_telemetry_event", extra=record)
     LLM_TELEMETRY_RECORDS.append(record)
+
+    # Populate metrics counters
+    llm_key = (provider, model, operation)
+    MetricsRegistry.llm_calls[llm_key] = MetricsRegistry.llm_calls.get(llm_key, 0) + 1
+    MetricsRegistry.llm_estimated_cost += est_cost
 
     # Conditionally log debug payload text ONLY in safe local/test environments
     if settings.ENABLE_LLM_DEBUG_PAYLOAD_LOGGING:

@@ -15,7 +15,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core import security as core_security
@@ -532,3 +532,344 @@ def get_document_status_json(
         if job
         else None,
     }
+
+
+@router.get("/ops/dashboard", response_class=HTMLResponse)
+def ops_dashboard(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    # Require authentication and get org_id
+    from app.models.document import Document
+    from app.models.project import ProposalProject
+    from app.models.requirement import Requirement
+
+    org_id, _ = get_current_org_and_user(request, db)
+
+    # Gather metrics
+    projects_count = (
+        db.scalar(
+            select(func.count(ProposalProject.id)).where(
+                ProposalProject.organization_id == org_id
+            )
+        )
+        or 0
+    )
+
+    docs_success = (
+        db.scalar(
+            select(func.count(Document.id))
+            .join(ProposalProject)
+            .where(
+                ProposalProject.organization_id == org_id,
+                Document.processing_status == "succeeded",
+            )
+        )
+        or 0
+    )
+
+    docs_failed = (
+        db.scalar(
+            select(func.count(Document.id))
+            .join(ProposalProject)
+            .where(
+                ProposalProject.organization_id == org_id,
+                Document.processing_status == "failed",
+            )
+        )
+        or 0
+    )
+
+    reqs_extracted = (
+        db.scalar(
+            select(func.count(Requirement.id))
+            .join(ProposalProject)
+            .where(ProposalProject.organization_id == org_id)
+        )
+        or 0
+    )
+
+    reqs_approved = (
+        db.scalar(
+            select(func.count(Requirement.id))
+            .join(ProposalProject)
+            .where(
+                ProposalProject.organization_id == org_id,
+                Requirement.status == "APPROVED",
+            )
+        )
+        or 0
+    )
+
+    reqs_needing_evidence = (
+        db.scalar(
+            select(func.count(Requirement.id))
+            .join(ProposalProject)
+            .where(
+                ProposalProject.organization_id == org_id,
+                Requirement.status == "NEEDS_EVIDENCE",
+            )
+        )
+        or 0
+    )
+
+    reqs_needing_review = (
+        db.scalar(
+            select(func.count(Requirement.id))
+            .join(ProposalProject)
+            .where(
+                ProposalProject.organization_id == org_id,
+                Requirement.status == "NEEDS_REVIEW",
+            )
+        )
+        or 0
+    )
+
+    # Job counts for the org
+    from app.models.job import ProcessingJob
+
+    failed_jobs = db.scalars(
+        select(ProcessingJob)
+        .where(
+            ProcessingJob.org_id == org_id,
+            ProcessingJob.status == "FAILED",
+        )
+        .order_by(ProcessingJob.created_at.desc())
+        .limit(5)
+    ).all()
+
+    # Exports count from audit events
+    from app.models.audit import AuditEvent
+
+    exports_count = (
+        db.scalar(
+            select(func.count(AuditEvent.id)).where(
+                AuditEvent.organization_id == org_id,
+                AuditEvent.action.like("EXPORT_%"),
+            )
+        )
+        or 0
+    )
+
+    # Draft approval rate
+    approval_rate = reqs_approved / reqs_extracted if reqs_extracted > 0 else 0.0
+
+    # Average processing time
+    avg_processing_time = db.scalar(
+        select(
+            func.avg(
+                func.extract("epoch", ProcessingJob.finished_at)
+                - func.extract("epoch", ProcessingJob.started_at)
+            )
+        ).where(
+            ProcessingJob.org_id == org_id,
+            ProcessingJob.status == "SUCCEEDED",
+            ProcessingJob.finished_at.isnot(None),
+            ProcessingJob.started_at.isnot(None),
+        )
+    )
+    avg_time_str = (
+        f"{round(avg_processing_time, 1)}s"
+        if avg_processing_time is not None
+        else "N/A"
+    )
+
+    from app.core.observability import MetricsRegistry
+
+    llm_cost = MetricsRegistry.llm_estimated_cost
+
+    font_url = (
+        "https://fonts.googleapis.com/css2?"
+        "family=Outfit:wght@300;400;500;600;700&display=swap"
+    )
+
+    # Render dashboard template with Outfit font and premium CSS layout
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <title>Pilot KPI Dashboard</title>
+        <link rel="stylesheet" href="/static/css/style.css">
+        <link href="{font_url}" rel="stylesheet">
+        <style>
+            body {{
+                font-family: 'Outfit', sans-serif;
+                background: var(--canvas);
+                color: var(--text-primary);
+                padding: var(--space-xl);
+            }}
+            .ops-container {{
+                max-width: 1000px;
+                margin: 0 auto;
+                display: flex;
+                flex-direction: column;
+                gap: var(--space-xl);
+            }}
+            .stats-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+                gap: var(--space-lg);
+            }}
+            .kpi-card {{
+                padding: var(--space-lg);
+                border-radius: 12px;
+                background: var(--surface);
+                border: 1px solid var(--border-color);
+                box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+                display: flex;
+                flex-direction: column;
+                gap: 0.5rem;
+            }}
+            .kpi-value {{
+                font-size: 2.25rem;
+                font-weight: 800;
+                color: var(--accent);
+                line-height: 1.1;
+            }}
+            .kpi-label {{
+                font-size: 0.85rem;
+                color: var(--text-muted);
+                text-transform: uppercase;
+                letter-spacing: 0.05em;
+            }}
+            .dashboard-header {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                border-bottom: 1px solid var(--border-color);
+                padding-bottom: var(--space-md);
+            }}
+            .failed-job-item {{
+                background: rgba(180,35,24,0.02);
+                border: 1px solid rgba(180,35,24,0.1);
+                padding: var(--space-md);
+                border-radius: 8px;
+                font-size: 0.9rem;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="glass-bg"></div>
+        <div class="ops-container">
+            <div class="dashboard-header">
+                <div>
+                    <h1 style="font-size: 2rem; font-weight: 800; margin: 0;">
+                        Pilot KPI Dashboard
+                    </h1>
+                    <p style="color: var(--text-secondary); margin: 0.25rem 0 0 0;">
+                        Observability, audit logs, and performance metrics.
+                    </p>
+                </div>
+                <a href="/projects" class="btn btn-secondary">
+                    &larr; Back to Workspace
+                </a>
+            </div>
+
+            <div class="stats-grid">
+                <div class="kpi-card">
+                    <div class="kpi-value">{projects_count}</div>
+                    <div class="kpi-label">Active Projects</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value">{docs_success + docs_failed}</div>
+                    <div class="kpi-label">
+                        Docs Uploaded ({docs_success} ok / {docs_failed} fail)
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value">{reqs_extracted}</div>
+                    <div class="kpi-label">Requirements Extracted</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value">{round(approval_rate * 100, 1)}%</div>
+                    <div class="kpi-label">
+                        Approval Rate ({reqs_approved} approved)
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value">
+                        {reqs_needing_review + reqs_needing_evidence}
+                    </div>
+                    <div class="kpi-label">
+                        Action Required ({reqs_needing_review} review / 
+                        {reqs_needing_evidence} evidence)
+                    </div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value">{exports_count}</div>
+                    <div class="kpi-label">Exports Generated</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value">{avg_time_str}</div>
+                    <div class="kpi-label">Avg Processing Time</div>
+                </div>
+                <div class="kpi-card">
+                    <div class="kpi-value">${round(llm_cost, 4)}</div>
+                    <div class="kpi-label">Est. LLM Cost (Global)</div>
+                </div>
+            </div>
+
+            <div class="kpi-card" style="margin-top: var(--space-md);">
+                <h2 style="font-size: 1.25rem; font-weight: 700; margin-top: 0;">
+                    Failed Processing Jobs
+                </h2>
+                <div style="display: flex; flex-direction: column; gap: 0.75rem;">
+    """
+    for job in failed_jobs:
+        created_str = (
+            job.created_at.strftime("%Y-%m-%d %H:%M:%S") if job.created_at else "N/A"
+        )
+        html_content += f"""
+                    <div class="failed-job-item">
+                        <div style="
+                            display: flex;
+                            justify-content: space-between;
+                            font-weight: 600;
+                            margin-bottom: 0.25rem;
+                        ">
+                            <span>Job: {job.job_type.replace("_", " ").title()}</span>
+                            <span style="color: var(--status-needs-evidence);">
+                                {job.error_type or "Error"}
+                            </span>
+                        </div>
+                        <div style="
+                            color: var(--text-secondary);
+                            font-size: 0.85rem;
+                            margin-bottom: 0.5rem;
+                        ">
+                            <span>Attempts: {job.attempts}/{job.max_attempts}</span> | 
+                            <span>Failed: {created_str}</span>
+                        </div>
+                        <div style="
+                            background: rgba(180,35,24,0.05);
+                            border: 1px solid rgba(180,35,24,0.1);
+                            padding: 0.5rem;
+                            border-radius: 4px;
+                            font-family: monospace;
+                            font-size: 0.8rem;
+                            word-break: break-all;
+                        ">
+                            {job.safe_error_message or "No error detail logged"}
+                        </div>
+                    </div>
+        """
+    if not failed_jobs:
+        html_content += """
+                    <div style="
+                        text-align: center;
+                        color: var(--text-muted);
+                        padding: var(--space-md);
+                    ">
+                        No failed background jobs requiring action.
+                        All operational systems clean.
+                    </div>
+        """
+    html_content += """
+                </div>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)

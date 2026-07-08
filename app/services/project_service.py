@@ -25,6 +25,8 @@ def log_audit_event(
     details: dict[str, Any] | None = None,
 ) -> None:
     """Helper to log audit events to the database."""
+    from app.core.observability import request_id_var
+
     event = AuditEvent(
         organization_id=org_id,
         user_id=user_id,
@@ -32,6 +34,7 @@ def log_audit_event(
         entity_type=entity_type,
         entity_id=entity_id,
         details=details,
+        request_id=request_id_var.get(),
     )
     db.add(event)
     db.commit()
