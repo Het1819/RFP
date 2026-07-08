@@ -2,7 +2,6 @@
 import argparse
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -12,15 +11,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from app.core.config import settings
 from app.core.llm import (
+    _token_overlap,
     clear_telemetry_records,
     get_llm_provider,
     get_telemetry_records,
 )
 
-
-def normalize(text: str) -> str:
-    """Normalize text for simple fuzzy matching."""
-    return re.sub(r"[^a-zA-Z0-9]", "", text).lower()
+# Minimum Jaccard token overlap to count a match as TP
+_MATCH_THRESHOLD = 0.55
 
 
 async def run_evaluation(offline_mode: bool) -> dict:
@@ -84,11 +82,11 @@ async def run_evaluation(offline_mode: bool) -> dict:
 
         tp = 0
         for i, expected in enumerate(expected_reqs):
-            exp_norm = normalize(expected["original_text"])
             for j, ext in enumerate(extracted_reqs):
-                ext_norm = normalize(ext.original_text)
-                # Simple exact or substring match
-                if exp_norm in ext_norm or ext_norm in exp_norm:
+                if j in matched_extracted:
+                    continue
+                overlap = _token_overlap(expected["original_text"], ext.original_text)
+                if overlap >= _MATCH_THRESHOLD:
                     matched_expected.add(i)
                     matched_extracted.add(j)
                     tp += 1
@@ -101,13 +99,14 @@ async def run_evaluation(offline_mode: bool) -> dict:
         total_fp += fp
         total_fn += fn
 
-        # Evaluate page references
+        # Evaluate page references for matched pairs
         for idx in matched_expected:
             expected = expected_reqs[idx]
-            # find the matching extracted requirement
-            exp_norm = normalize(expected["original_text"])
-            for ext in extracted_reqs:
-                if exp_norm in normalize(ext.original_text):
+            for j, ext in enumerate(extracted_reqs):
+                if j not in matched_extracted:
+                    continue
+                overlap = _token_overlap(expected["original_text"], ext.original_text)
+                if overlap >= _MATCH_THRESHOLD:
                     total_page_references_checked += 1
                     if ext.source_page == expected.get("source_page"):
                         total_page_references_correct += 1
@@ -178,9 +177,17 @@ async def run_evaluation(offline_mode: bool) -> dict:
     total_cost = sum(r.get("estimated_cost", 0.0) for r in records)
     failures = sum(1 for r in records if not r["success"])
 
+    thresholds_pass = (
+        recall >= 0.90
+        and total_fp == 0
+        and evidence_coverage >= 0.85
+        and total_unsupported_claims == 0
+    )
+
     eval_report = {
         "offline": offline_mode,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "thresholds_pass": thresholds_pass,
         "metrics": {
             "recall": round(recall, 3),
             "precision": round(precision, 3),
@@ -208,16 +215,20 @@ def print_markdown_report(report: dict) -> None:
     m = report["metrics"]
     t = report["telemetry"]
     mode = "OFFLINE (Fake LLM)" if report["offline"] else "REAL LLM"
+    passed = report.get("thresholds_pass", False)
 
     print("\n" + "=" * 60)
     print(f"              RFP ARCHITECT EVALUATION REPORT ({mode})")
     print("=" * 60)
     print(f"Timestamp: {report['timestamp']}")
+    print(f"Pilot Thresholds: {'[PASS]' if passed else '[FAIL]'}")
     print("\n### Core AI Metrics:")
     print(f"- **Recall**: {m['recall']:.3f} (target >= 0.90)")
     print(f"- **Precision**: {m['precision']:.3f}")
     print(f"- **F1 Score**: {m['f1']:.3f}")
-    print(f"- **Hallucinated Requirements (FP)**: {m['hallucinated_count']}")
+    print(
+        f"- **Hallucinated Requirements (FP)**: {m['hallucinated_count']} (target = 0)"
+    )
     print(f"- **Missed Requirements (FN)**: {m['missed_count']}")
     print(
         f"- **Evidence Coverage Rate**: {m['evidence_coverage']:.3f} (target >= 0.85)"

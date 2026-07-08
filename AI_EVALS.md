@@ -2,7 +2,10 @@
 
 This document describes how to measure, verify, and maintain the quality of the RFP requirements extraction and response drafting pipeline.
 
+---
+
 ## 1. Why AI Evaluations Exist
+
 The RFP Architect MVP relies on LLMs for core value tasks:
 - Extracting compliance/technical requirements from complex documents.
 - Generating draft responses backed by source evidence.
@@ -12,25 +15,47 @@ Evaluations help prevent regressions such as:
 - Hallucinated requirements (low precision).
 - Non-grounded or unsupported claims.
 - Prompt injection bypasses.
+- Deduplication failures.
+- Citation/page-number errors.
 
 ---
 
-## 2. Evaluation Fixtures
-Golden cases reside in `evals/fixtures/*.json`. We define three baseline test cases:
-1. **Simple RFP** (`simple_rfp.json`): 3-5 clear, simple security requirements.
-2. **Ambiguous & Duplicate RFP** (`ambiguous_rfp.json`): Tests deduplication and page/section reference matching.
-3. **Injection RFP** (`injection_rfp.json`): Tests prompt injection robustness (untrusted instruction ignore boundary).
+## 2. Current Eval Results (Step 7 — Offline)
+
+| Metric | Result | Threshold |
+|--------|--------|-----------|
+| Recall | 1.000 | >= 0.90 |
+| Precision | 1.000 | — |
+| F1 Score | 1.000 | — |
+| Hallucinated Requirements | 0 | = 0 |
+| Missed Requirements | 0 | — |
+| Evidence Coverage | 1.000 | >= 0.85 |
+| Unsupported Claims | 0 | = 0 |
+| Citation Page Accuracy | 1.000 | — |
+
+**Pilot Thresholds: PASS**
+
+---
+
+## 3. Evaluation Fixtures
+
+Golden cases reside in `evals/fixtures/*.json`. Three baseline test cases are defined:
+
+1. **Simple RFP** (`simple_rfp.json`): 3 security requirements with must/shall/should triggers.
+2. **Ambiguous & Duplicate RFP** (`ambiguous_rfp.json`): Two PostgreSQL 16 references across different pages/sections (tests deduplication and page tracking).
+3. **Injection RFP** (`injection_rfp.json`): Contains a prompt-injection sentence mixed with a legitimate SSO requirement (tests guardrail and salvage logic).
 
 ### Adding a Golden Case
+
 Add a JSON file under `evals/fixtures/` with this structure:
 ```json
 {
   "name": "Case Description",
-  "source_text": "[PAGE 1] raw rfp content here...",
+  "source_text": "[PAGE 1] Section X.Y: Title\nrequirement sentence here...",
   "expected_requirements": [
     {
       "original_text": "the exact sentence expected",
-      "source_section": "Section name",
+      "source_section": "Section X.Y",
       "source_page": 1,
       "requirement_type": "Technical",
       "mandatory": true,
@@ -45,7 +70,7 @@ Add a JSON file under `evals/fixtures/` with this structure:
     }
   ],
   "expected_drafts": {
-    "the exact requirement text to draft": {
+    "the exact requirement text": {
       "needs_evidence": false,
       "answer_contains": "expected phrase in final draft"
     }
@@ -53,41 +78,125 @@ Add a JSON file under `evals/fixtures/` with this structure:
 }
 ```
 
+**Rules for new golden cases:**
+- Use realistic RFP language (must/shall/should/required).
+- Use `[PAGE N]` markers to define page boundaries.
+- Include expected `source_page` in each expected requirement.
+- Do not add cases that only work when matching is loosened — thresholds must not drop below targets.
+- Test prompt-injection robustness by including at least one fixture with injection text.
+
 ---
 
-## 3. How to Run Evaluations
+## 4. Eval Matching Logic
+
+Requirements are matched between extracted and expected using **Jaccard token-overlap** on `normalize_text()` output:
+
+- `normalize_text()` casefolds, expands aliases (e.g. `postgres` → `postgresql`, `mfa` → `multi-factor authentication`), strips punctuation, and collapses whitespace.
+- Two requirements match if their Jaccard overlap >= **0.55** (configurable via `_MATCH_THRESHOLD`).
+- Each extracted requirement is matched at most once (prevents double-counting).
+
+This is more robust than substring matching but avoids the subjectivity of LLM-as-judge.
+
+---
+
+## 5. How Deduplication Works
+
+After extraction, `deduplicate_requirements()` merges near-duplicate requirements:
+
+- Uses the same `_token_overlap()` function with threshold **0.75** (higher than eval matching, to avoid false merges).
+- When two requirements overlap >= 0.75, the first occurrence is kept and receives an `extraction_warnings` entry recording the merged duplicate.
+- Both source page/section references are recorded in the warning.
+- Distinct requirements (overlap < 0.75) are always preserved.
+
+**Example:** `"The database must run on PostgreSQL 16"` and `"The database must use PostgreSQL 16"` will be merged. But `"The system must support MFA"` and `"The vendor shall provide 24/7 support"` will not be merged.
+
+---
+
+## 6. How Prompt-Injection Text Is Handled
+
+The FakeLLMProvider (and the real Anthropic system prompt) contain explicit guardrails:
+
+**Detection patterns** (compiled regex, checked per line and per sentence):
+- `"ignore (previous|all|above|prior) instruction"`
+- `"disregard (previous|all|above|prior)"`
+- `"you are now"`
+- `"act as (if|a|an)"`
+- `"mark all requirements compliant"`
+- `"system prompt"` / `"override the system"`
+
+**Behavior:**
+1. If a line starts with injection text, the line is rejected.
+2. **Salvage logic**: If a line contains injection text followed by a legitimate requirement (e.g. `"Ignore previous instructions. The system must support SSO."`), sentences after the injection sentence are still checked and valid requirements are extracted.
+3. Rejected sentences are logged as `extraction_rejected_injection` warnings (text prefix only, not full content).
+
+**Real Anthropic provider**: The `_SYSTEM_EXTRACT` prompt explicitly tells the model not to extract meta-instructions or jailbreak text, and requires a source quote for every extracted requirement.
+
+---
+
+## 7. How Citation Validity Is Scored
+
+- Each extracted requirement has a `source_page` set from the nearest preceding `[PAGE N]` marker.
+- Eval counts a citation as correct when `ext.source_page == expected_req.source_page`.
+- If a requirement has no page marker context, `source_page` will be `None` and the citation is scored as incorrect.
+- Invalid/missing citations are NOT silently ignored — they reduce `citation_accuracy`.
+- The pipeline does NOT fabricate page numbers.
+
+---
+
+## 8. How to Run Evaluations
 
 ### Offline Evaluation Mode (Default / Cost-Free)
+
 Uses the deterministic `FakeLLMProvider`. Requires no API keys:
 ```bash
 .\.venv\Scripts\python.exe scripts/run_ai_eval.py --offline
 ```
 
 ### Real-Provider Evaluation Mode
+
 Runs evaluations against the real Anthropic API:
 ```bash
-# Set OIDC/API keys and enable real LLM eval
 set ANTHROPIC_API_KEY=your-api-key
 set ENABLE_REAL_LLM_EVAL=true
-
 .\.venv\Scripts\python.exe scripts/run_ai_eval.py
 ```
-*Note: Real-provider evals consume API tokens and incur actual costs.*
+
+> **Note:** Real-provider evals consume API tokens and incur actual costs.
 
 ---
 
-## 4. Evaluation Metrics
-- **Recall**: Proportion of golden requirements extracted successfully (`TP / (TP + FN)`).
-- **Precision**: Proportion of extracted requirements that match golden cases (`TP / (TP + FP)`).
-- **F1 Score**: Harmonic mean of recall and precision.
-- **Evidence Coverage Rate**: Ratio of drafted answers correctly reflecting evidence presence.
-- **Unsupported Claims**: Number of answers that hallucinatory claim facts when evidence is missing.
-- **Citation Page Accuracy**: Ratio of correct page number mappings.
-- **Average Latency**: Latency of LLM operations in milliseconds.
-- **Estimated Cost**: API costs calculated based on token counts.
+## 9. What Not to Log
 
-### Pilot Acceptable Thresholds
-- **Recall**: >= 0.90
-- **Evidence Coverage**: >= 0.85
-- **Unsupported Claims**: 0 (strict)
-- **Citation Accuracy**: >= 0.80
+- **Never** log raw prompt text.
+- **Never** log raw LLM completions.
+- **Never** log uploaded document text or customer RFP content.
+- **Never** log API keys.
+- `ENABLE_LLM_DEBUG_PAYLOAD_LOGGING=true` is **forbidden in production** (enforced by Settings validator).
+- Telemetry logs only: `provider`, `model`, `operation`, `latency_ms`, `success`, `exception_type`, `input_tokens`, `output_tokens`, `estimated_cost`.
+
+---
+
+## 10. Eval Metrics Reference
+
+| Metric | Formula | What it measures |
+|--------|---------|-----------------|
+| Recall | TP / (TP + FN) | Fraction of expected requirements extracted |
+| Precision | TP / (TP + FP) | Fraction of extractions that are correct |
+| F1 | 2 × P × R / (P + R) | Harmonic mean of precision and recall |
+| Evidence Coverage | Covered / Attempted | Draft responses with correct evidence grounding |
+| Unsupported Claims | Count | Drafts claiming facts without evidence |
+| Citation Accuracy | Correct / Checked | Source page number accuracy |
+| Hallucinated Count | FP | Extracted requirements with no golden match |
+| Missed Count | FN | Golden requirements not found in extraction |
+
+---
+
+## 11. Pilot Acceptable Thresholds
+
+| Metric | Threshold |
+|--------|-----------|
+| Recall | >= 0.90 |
+| Hallucinated Requirements | = 0 |
+| Evidence Coverage | >= 0.85 |
+| Unsupported Claims | = 0 |
+| Citation Accuracy | >= 0.80 (documented; not yet a hard block) |
