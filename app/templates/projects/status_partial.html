@@ -17,12 +17,29 @@
             <button type="submit" class="btn btn-primary" style="align-self: flex-end; padding: 0.75rem 1.75rem;">Upload & Analyze</button>
         </form>
         
-    {% elif document.processing_status == "processing" %}
-        <div hx-get="/projects/{{ project.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML" style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: 2.5rem 1rem; gap: 1.25rem; background: var(--surface-tertiary); border: 1px solid var(--border-color); border-radius: 12px;">
+    {% elif document.processing_status in ("pending", "processing") or (job and job.status in ("QUEUED", "RUNNING", "RETRYING")) %}
+        <div hx-get="/projects/{{ project.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML" style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: 2.5rem 1rem; gap: 1.25rem; background: var(--surface-tertiary); border: 1px solid var(--border-color); border-radius: 12px; width: 100%;">
             <div class="spinner" style="width: 44px; height: 44px; border: 4px solid rgba(18, 105, 211, 0.15); border-left-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite;"></div>
-            <div>
-                <h4 style="font-size: 1.15rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-primary);">Parsing RFP Document...</h4>
-                <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">Extracting text and page references from <strong style="color: var(--text-primary);">{{ document.name }}</strong>.</p>
+            <div style="width: 100%;">
+                <h4 style="font-size: 1.15rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-primary);">
+                    {% if job and job.status == "RETRYING" %}
+                        Retrying Document Extraction... (Attempt {{ job.attempts }} of {{ job.max_attempts }})
+                    {% else %}
+                        Parsing RFP Document...
+                    {% endif %}
+                </h4>
+                <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5; margin-bottom: 1rem;">
+                    Extracting text and page references from <strong style="color: var(--text-primary);">{{ document.name }}</strong>.
+                </p>
+                {% if job %}
+                <div style="width: 80%; max-width: 300px; margin: 0 auto; background: var(--border-color); height: 8px; border-radius: 4px; overflow: hidden; margin-bottom: 0.5rem;">
+                    <div style="background: var(--accent); width: {{ job.progress_percent or 0 }}%; height: 100%; transition: width 0.3s;"></div>
+                </div>
+                <p style="font-size: 0.8rem; color: var(--text-muted);">
+                    Status: <strong style="color: var(--text-primary);">{{ job.status }}</strong> ({{ job.progress_percent or 0 }}%)<br>
+                    Current Step: <strong style="color: var(--text-primary);">{{ job.current_step or 'Initializing...' }}</strong>
+                </p>
+                {% endif %}
             </div>
         </div>
         
@@ -49,7 +66,10 @@
                     <p style="font-size: 2rem; font-weight: 700; color: var(--accent);">{{ (document.content or "") | length }}</p>
                 </div>
             </div>
-            <a href="/projects/{{ project.id }}/matrix" class="btn btn-primary" style="text-align: center; margin-top: 0.5rem; display: block; text-decoration: none;">Open Compliance Matrix</a>
+            <div style="display: flex; gap: var(--space-sm); align-items: center;">
+                <a href="/projects/{{ project.id }}/matrix" class="btn btn-primary" style="flex: 1; text-align: center; text-decoration: none;">Open Compliance Matrix</a>
+                <a href="/projects/{{ project.id }}/jobs" class="btn btn-secondary" style="text-decoration: none;">View Job Log</a>
+            </div>
         </div>
         
     {% else %}
@@ -66,13 +86,23 @@
                 <span class="badge" style="background: var(--status-needs-evidence-bg); border-color: rgba(180, 35, 24, 0.3); color: var(--status-needs-evidence); font-size: 0.8rem;">FAILED</span>
             </div>
             
-            {% if document.processing_error %}
+            {% set err_detail = job.safe_error_message if (job and job.safe_error_message) else document.processing_error %}
+            {% if err_detail %}
             <div style="background: var(--status-needs-evidence-bg); border: 1px solid rgba(180, 35, 24, 0.3); color: var(--status-needs-evidence); padding: 1rem; border-radius: 8px; font-size: 0.9rem; line-height: 1.5; word-break: break-word;">
-                <strong>Error Details:</strong> {{ document.processing_error }}
+                <strong>Error Details:</strong> {{ err_detail }}
             </div>
             {% endif %}
             
-            <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">Please ensure the document contains extractable text layers and is not corrupted, then retry upload below.</p>
+            <div style="display: flex; gap: var(--space-sm); align-items: center;">
+                <form action="/projects/{{ project.id }}/documents/{{ document.id }}/retry" method="POST" style="margin: 0;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                    <button type="submit" class="btn btn-primary" style="padding: 0.75rem 1.75rem;">Retry Extraction</button>
+                </form>
+                <a href="/projects/{{ project.id }}/jobs" class="btn btn-secondary" style="padding: 0.75rem 1.75rem; text-decoration: none;">View Job Log</a>
+            </div>
+            
+            <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 0.5rem 0;">
+            <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">Or upload a different file:</p>
             
             <form action="/projects/{{ project.id }}/upload" method="POST" enctype="multipart/form-data" style="display: flex; flex-direction: column; gap: 1.25rem;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
@@ -81,7 +111,7 @@
                     <div style="font-size: 2rem; margin-bottom: 0.5rem;">📤</div>
                     <p style="font-weight: 600; color: var(--text-primary); margin-bottom: 0.25rem;">Upload new file</p>
                 </div>
-                <button type="submit" class="btn btn-primary" style="align-self: flex-end; padding: 0.75rem 1.75rem;">Retry Upload</button>
+                <button type="submit" class="btn btn-primary" style="align-self: flex-end; padding: 0.75rem 1.75rem;">Upload & Analyze</button>
             </form>
         </div>
     {% endif %}

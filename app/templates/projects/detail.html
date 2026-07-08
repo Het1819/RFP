@@ -120,7 +120,7 @@
                 <!-- 2. Dynamic Workflow Progress Stepper -->
                 {% set active_step = 1 %}
                 {% if document %}
-                    {% if document.processing_status == 'processing' %}
+                    {% if document.processing_status in ('pending', 'processing') %}
                         {% set active_step = 2 %}
                     {% elif document.processing_status == 'completed' %}
                         {% set active_step = 4 %}

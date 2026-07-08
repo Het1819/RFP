@@ -3,6 +3,7 @@ from app.models.base import Base
 from app.models.comment import RequirementComment
 from app.models.document import Document, DocumentPage
 from app.models.evidence import EvidenceLink
+from app.models.job import ProcessingJob
 from app.models.organization import Organization
 from app.models.project import ProposalProject
 from app.models.requirement import Requirement
@@ -18,6 +19,7 @@ __all__ = [
     "DraftResponse",
     "EvidenceLink",
     "Organization",
+    "ProcessingJob",
     "ProposalProject",
     "Requirement",
     "RequirementComment",

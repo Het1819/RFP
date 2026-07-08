@@ -100,10 +100,10 @@ print('Pilot user created successfully: pilot@company.com')
 
 ---
 
-## 6. Verifying App Status
+## 6. Verifying App & Queue Worker Status
 
+### Web Application Health
 Use the healthcheck endpoints to verify availability:
-
 - **`/healthz`**: Returns `200` to indicate the Python process is alive.
   ```bash
   curl -f http://localhost:8000/healthz
@@ -113,10 +113,37 @@ Use the healthcheck endpoints to verify availability:
   curl -f http://localhost:8000/readyz
   ```
 
+### Queue Worker Verification
+To verify that the `arq` worker is running and processing background tasks:
+1. View worker logs:
+   ```bash
+   docker compose -f docker-compose.prod.yml logs worker
+   ```
+2. Verify Redis connectivity:
+   ```bash
+   docker compose -f docker-compose.prod.yml exec redis redis-cli ping
+   ```
+
 ---
 
-## 7. Security Best Practices
+## 7. Retrying Failed Jobs
+
+When a document parsing or requirement extraction job fails (marked as `FAILED` in the database), you can retry it:
+1. **Via UI**: Navigate to the Project Workspace dashboard. In the RFP Status Card, a detailed safe error message will be shown. Click the **"Retry Extraction"** button to re-queue the job.
+2. **Via Log**: Go to the `/projects/{project_id}/jobs` route to view the history of all background jobs and click the **"Retry Job"** button next to the failed entry.
+
+---
+
+## 8. Redis Operations & Persistence
+
+For production/pilot setups:
+1. **Persistence**: Redis is configured with `--appendonly yes` and uses the `redis_data` volume to ensure job queues persist across container restarts. Do not disable this unless job queue state loss is acceptable.
+2. **Resource Management**: The `arq` worker is configured with a concurrency limit (`max_jobs = 4` by default) to prevent high-cpu or network resource starvation during parallel document parses.
+
+---
+
+## 9. Security Best Practices
 
 1. **HTTPS and Reverse Proxy**: Always configure an external load balancer or reverse proxy (such as Nginx, AWS ALB, or Cloudflare) to terminate SSL/TLS before forwarding requests to the application.
-2. **Backups**: Implement automated daily backups for your PostgreSQL database volume.
+2. **Backups**: Implement automated daily backups for your PostgreSQL database volume (`postgres_data`) and Redis AOF file (`redis_data`).
 3. **Secrets Management**: Never bake secrets (API keys, credentials, or session keys) into Docker images. Pass them as runtime environment variables.

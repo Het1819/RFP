@@ -11,6 +11,27 @@ services:
       - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
       - DATABASE_URL=postgresql+psycopg://rfp_user:rfp_password@postgres:5432/rfp_architect
       - REDIS_URL=redis://redis:6379/0
+      - QUEUE_ENABLED=true
+      - LLM_PROVIDER=fake
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["arq", "app.worker.WorkerSettings"]
+    environment:
+      - APP_ENV=production
+      - AUTH_MODE=session
+      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
+      - DATABASE_URL=postgresql+psycopg://rfp_user:rfp_password@postgres:5432/rfp_architect
+      - REDIS_URL=redis://redis:6379/0
+      - QUEUE_ENABLED=true
       - LLM_PROVIDER=fake
     depends_on:
       postgres:
@@ -36,6 +57,9 @@ services:
 
   redis:
     image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -45,3 +69,4 @@ services:
 
 volumes:
   postgres_data:
+  redis_data:

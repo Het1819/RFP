@@ -423,4 +423,60 @@ The next step is **Step 3 (CSRF Protection)**:
 - `.\.venv\Scripts\python.exe scripts/run_ai_eval.py --offline`: PASS.
 
 ### Remaining Issues
-- None. Step 9 is complete.
+- None. Step 9 is complete. (COMPLETED)
+
+
+## 15. Step 10 - Queue-backed Processing and Job Reliability
+
+### Files Changed
+- [app/core/config.py](file:///D:/RFA/Project/rfp-architect-mvp/app/core/config.py) (added queue and redis configuration settings).
+- [app/core/queue.py](file:///D:/RFA/Project/rfp-architect-mvp/app/core/queue.py) (created background queue enqueuer and task coordinator).
+- [app/models/job.py](file:///D:/RFA/Project/rfp-architect-mvp/app/models/job.py) (created new `ProcessingJob` model to track steps, progress percentage, retries, and generic error messages).
+- [app/models/__init__.py](file:///D:/RFA/Project/rfp-architect-mvp/app/models/__init__.py) (exported and registered the `ProcessingJob` model).
+- [alembic/versions/f0093fb3f942_create_processing_jobs_table.py](file:///D:/RFA/Project/rfp-architect-mvp/alembic/versions/f0093fb3f942_create_processing_jobs_table.py) (created database migration for background jobs table).
+- [app/services/project_service.py](file:///D:/RFA/Project/rfp-architect-mvp/app/services/project_service.py) (implemented transactional pipeline logic `process_job_pipeline_async` with step-by-step progress tracking, audit logging, automatic retries, and idempotent deletions to avoid duplicated rows).
+- [app/worker.py](file:///D:/RFA/Project/rfp-architect-mvp/app/worker.py) (created arq background worker configuration and process entry point).
+- [app/web/routes/projects.py](file:///D:/RFA/Project/rfp-architect-mvp/app/web/routes/projects.py) (updated file upload and knowledge base uploads to run asynchronously, added `/retry` action, `/jobs` dashboard, and `/documents/{id}/status` JSON endpoint).
+- [app/templates/projects/status_partial.html](file:///D:/RFA/Project/rfp-architect-mvp/app/templates/projects/status_partial.html) (designed HTMX status polling card with active progress bar and retry button).
+- [app/templates/projects/detail.html](file:///D:/RFA/Project/rfp-architect-mvp/app/templates/projects/detail.html) (enabled stepper active state for pending document processing).
+- [docker-compose.prod.yml](file:///D:/RFA/Project/rfp-architect-mvp/docker-compose.prod.yml) (added `worker` container service and configured Redis AOF persistence volume).
+- [DEPLOYMENT.md](file:///D:/RFA/Project/rfp-architect-mvp/DEPLOYMENT.md) (added guides on running background workers, verifying queues, and retrying failed jobs).
+- [.env.example](file:///D:/RFA/Project/rfp-architect-mvp/.env.example) (documented queue configuration keys).
+- [tests/integration/test_queue_jobs.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_queue_jobs.py) (added 5 comprehensive integration tests).
+
+### Queue Implementation Chosen
+- **Arq (Async Redis Queue)**: Lightweight Redis-backed job queue for python. Fits FastAPI's async nature perfectly.
+
+### Config Added
+- `QUEUE_ENABLED` (Boolean, defaults to False for local/test to run without Redis).
+- `REDIS_URL` (DSN, validated to be present in production/pilot when QUEUE_ENABLED is True).
+- `JOB_MAX_RETRIES` (defaults to 3).
+- `JOB_TIMEOUT_SECONDS` (defaults to 300).
+- `JOB_RETRY_BACKOFF_SECONDS` (defaults to 5).
+
+### Job Model / Statuses
+- Columns: `id`, `org_id`, `project_id`, `document_id`, `job_type`, `status` (`QUEUED`, `RUNNING`, `SUCCEEDED`, `FAILED`, `RETRYING`, `CANCELLED`), `progress_percent`, `current_step`, `attempts`, `max_attempts`, `error_type`, `safe_error_message`, `started_at`, `finished_at`, `created_by_user_id`, `created_at`, `updated_at`.
+
+### Idempotency
+- Added transaction-aware cleanups deleting existing `DocumentPage` and `Requirement` entries for a document before writing new ones during retry.
+
+### Tests Added
+- `test_upload_creates_job_with_queue_enabled`
+- `test_job_idempotency_prevents_duplication`
+- `test_failed_processing_logs_safe_error`
+- `test_foreign_org_validation_for_jobs_and_retry`
+- `test_redis_url_enforcement_in_production`
+
+### Checks/Tests results
+- `pytest -q`: PASS (140 tests passed).
+- `ruff check .`: PASS (all clean).
+- `ruff format --check .`: PASS (all clean).
+- `mypy app`: PASS (no issues).
+- `npm run assets:build`: PASS (successful build).
+- `npx tsc --noEmit`: PASS.
+- `docker compose -f docker-compose.prod.yml config`: PASS.
+- `docker build -t rfp-architect-mvp:pilot .`: PASS (compiled successfully).
+- `.\.venv\Scripts\python.exe scripts/run_ai_eval.py --offline`: PASS.
+
+### Remaining Issues
+- None. Step 10 is complete.

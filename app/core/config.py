@@ -27,6 +27,10 @@ class Settings(BaseSettings):
         "postgresql+psycopg://rfp_user:rfp_password@localhost:5432/rfp_architect"
     )
     REDIS_URL: str = "redis://localhost:6379/0"
+    QUEUE_ENABLED: bool = False
+    JOB_MAX_RETRIES: int = 3
+    JOB_TIMEOUT_SECONDS: int = 300
+    JOB_RETRY_BACKOFF_SECONDS: int = 5
     STORAGE_BACKEND: str = "local"
     LOCAL_STORAGE_PATH: str = "./data"
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10 MB default
@@ -77,6 +81,15 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "ENABLE_LLM_DEBUG_PAYLOAD_LOGGING must be False "
                     "in production-like environments"
+                )
+            if self.QUEUE_ENABLED and (
+                not self.REDIS_URL
+                or self.REDIS_URL == _PLACEHOLDER
+                or len(self.REDIS_URL.strip()) == 0
+            ):
+                raise ValueError(
+                    "REDIS_URL must be configured when QUEUE_ENABLED is "
+                    "True in production-like environments"
                 )
 
         if self.AUTH_MODE not in ("dev", "session", "oidc"):
