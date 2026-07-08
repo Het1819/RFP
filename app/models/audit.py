@@ -2,11 +2,16 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, String
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+
+# Portable JSON column: JSONB on PostgreSQL, generic JSON (TEXT-backed) on SQLite.
+# This allows Base.metadata.create_all() to succeed in SQLite-backed test suites
+# while production PostgreSQL retains the full JSONB type with GIN-index support.
+_AUDIT_DETAILS_TYPE = JSON().with_variant(JSONB(astext_type=Text()), "postgresql")
 
 
 class AuditEvent(Base):
@@ -23,7 +28,7 @@ class AuditEvent(Base):
     entity_type: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_id: Mapped[uuid.UUID] = mapped_column(nullable=False)
     details: Mapped[dict[str, Any] | list[Any] | None] = mapped_column(
-        JSONB, nullable=True
+        _AUDIT_DETAILS_TYPE, nullable=True
     )
     ip_address: Mapped[str | None] = mapped_column(String(50), nullable=True)
     request_id: Mapped[str | None] = mapped_column(String(50), nullable=True)
