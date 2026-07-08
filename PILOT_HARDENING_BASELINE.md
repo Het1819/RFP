@@ -287,9 +287,70 @@ The next step is **Step 3 (CSRF Protection)**:
 - `npx.cmd tsc --noEmit`: PASS (only baseline tsconfig option deprecation warning).
 - `scripts/run_ai_eval.py --offline`: PASS (thresholds_pass = true).
 
-### Remaining Gaps for Step 8
-- Human review interface and HTMX workflow actions for requirement approval/rejection.
+### Remaining Gaps for Step 7
+- Human review interface and HTMX workflow actions for requirement approval/rejection. (COMPLETED)
 
 
+## 13. Step 8 - Evidence Grounding and Citation Integrity
 
+### Files Changed
+- [app/services/evidence_validation.py](file:///D:/RFA/Project/rfp-architect-mvp/app/services/evidence_validation.py) (created containing evidence validation and draft grounding checkers).
+- [app/web/routes/compliance.py](file:///D:/RFA/Project/rfp-architect-mvp/app/web/routes/compliance.py) (switched inline checks to validation service, added draft approval blocks, and appended citation provenance in DOCX export).
+- [app/services/retriever.py](file:///D:/RFA/Project/rfp-architect-mvp/app/services/retriever.py) (restricted retrieval to completed documents, returning page citation details).
+- [scripts/run_ai_eval.py](file:///D:/RFA/Project/rfp-architect-mvp/scripts/run_ai_eval.py) (extended offline evaluation framework with evidence validation/grounding integrity checks).
+- [evals/fixtures/evidence_integrity_rfp.json](file:///D:/RFA/Project/rfp-architect-mvp/evals/fixtures/evidence_integrity_rfp.json) (added new integrity/grounding eval fixture).
+- [tests/integration/test_evidence_grounding.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_evidence_grounding.py) (added 13 new integration tests).
+- [tests/unit/test_evidence_validation.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/unit/test_evidence_validation.py) (added 26 new unit tests).
+- [tests/integration/test_knowledge.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_knowledge.py) and [test_security_hardening.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_security_hardening.py) (updated test assertions).
 
+### Evidence Validation Helpers Added
+- `validate_evidence_candidate()`
+- `resolve_evidence_from_document_page()`
+- `evidence_quote_exists_on_page()`
+- `normalize_evidence_text()`
+- `require_same_project_evidence()`
+
+### Client-Trusted Fields Removed/Restricted
+- **Snippet text / Page number**: Stricter normalization and substring matching.
+- **Evidence score**: Completely recomputed or clamped to 0.0 server-side (ignored client values).
+
+### Draft Grounding Checks Added
+- `extract_draft_claims()`: Extracts sentences, skipping boilerplate compliance text.
+- `check_claim_support()`: Calculates Jaccard token overlap against evidence snippets (minimum 0.20 threshold).
+- `validate_draft_grounding()`: Flags unsupported claims.
+- **Approval Gate**: Set draft status to `needs_review` and matrix requirement to `NEEDS_REVIEW` if grounding fails or a mandatory requirement has no evidence links.
+
+### Retrieval Integrity Changes
+- Filtered retrieval queries to only return pages from documents with `processing_status='completed'`.
+- Trimmed and validated retrieved snippets to strict character bounds `[10, 2000]`.
+
+### Tests Added
+- **Unit (25 cases)**: Cover Jaccard token overlap, claim extraction, boilerplate skipping, and empty fields.
+- **Integration (13 cases)**: Cover cross-project blocking, fake snippet rejection, wrong page rejection, unapproved document rejection, client-score dismissal, mandatory block, and DOCX citation provenance.
+
+### Offline Eval Result Summary (Step 8)
+| Metric | Result | Threshold | Status |
+|---|---|---|---|
+| Recall | 1.000 | >= 0.90 | PASS |
+| Precision | 1.000 | — | — |
+| F1 Score | 1.000 | — | — |
+| Hallucinated Requirements | 0 | = 0 | PASS |
+| Evidence Coverage | 1.000 | >= 0.85 | PASS |
+| Unsupported Claims | 0 | = 0 | PASS |
+| Citation Page Accuracy | 1.000 | — | — |
+| Fabricated Evidence Rejected | 1 | — | — |
+| Invalid Citations Rejected | 1 | — | — |
+| Draft Grounding Pass Rate | 0.500 | — | — |
+| Evidence Validation Accuracy | 1.000 | = 1.000 | PASS |
+
+### Checks Run
+- `pytest -q`: PASS (127 tests passed).
+- `ruff check .`: PASS (all clean).
+- `ruff format --check .`: PASS (all clean).
+- `mypy app`: PASS (no issues).
+- `npm run assets:build`: PASS (successful build).
+- `npx tsc --noEmit`: PASS (only tsconfig option warning).
+- `.\.venv\Scripts\python.exe scripts/run_ai_eval.py --offline`: PASS (thresholds_pass = true).
+
+### Remaining Gaps for Step 9
+- Humans still need a streamlined UI workflow for routing review tasks to other users.

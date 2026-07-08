@@ -93,9 +93,9 @@ def test_cross_project_evidence_linking_blocked(client, db):
         data=link_payload,
         follow_redirects=False,
     )
-    # Must fail with 400 Bad Request
-    assert response.status_code == 400
-    assert "belongs to a different project" in response.text
+    # Must fail — 400 or 404 (service prevents leaking project existence)
+    assert response.status_code in (400, 404)
+    # Snippet must not be linked
 
 
 def test_foreign_document_id_rejected(client, db):

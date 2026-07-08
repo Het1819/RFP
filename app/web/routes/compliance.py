@@ -14,7 +14,6 @@ from app.core.config import settings
 from app.core.csrf import validate_csrf_token
 from app.core.database import get_db, get_default_org_and_user
 from app.core.security import (
-    get_document_for_org,
     get_project_for_org,
     get_requirement_for_org,
 )
@@ -380,77 +379,42 @@ def link_evidence_action(
     document_id: uuid.UUID = Form(...),
     snippet: str = Form(...),
     page_number: int = Form(None),
+    # client score is ignored — clamped/recomputed server-side
     score: float = Form(0.0),
     db: Session = Depends(get_db),
 ) -> Any:
     org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
-    doc = get_document_for_org(db, document_id, org_id)
 
-    # Enforce document belongs to same project as requirement
-    if doc.project_id != req.project_id:
-        raise HTTPException(
-            status_code=400,
-            detail="Document belongs to a different project",
+    # Validate evidence candidate server-side — never trust client snippet/page/score
+    from app.services.evidence_validation import (
+        EvidenceValidationError,
+        validate_evidence_candidate,
+    )
+
+    try:
+        canonical_snippet, resolved_page = validate_evidence_candidate(
+            db,
+            requirement_project_id=req.project_id,
+            document_id=document_id,
+            page_number=page_number,
+            client_snippet=snippet,
         )
+    except EvidenceValidationError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
 
-    # Enforce document status and eligibility
-    if doc.processing_status != "completed":
-        raise HTTPException(status_code=400, detail="Document is not fully processed")
-    if doc.doc_role == "knowledge_base" and doc.approval_status != "APPROVED":
-        raise HTTPException(status_code=400, detail="Document is not approved")
-
-    # Validate page_number if provided
-    if page_number is not None:
-        from app.models.document import DocumentPage
-
-        page_exists = db.scalar(
-            select(DocumentPage).where(
-                DocumentPage.document_id == document_id,
-                DocumentPage.page_number == page_number,
-            )
-        )
-        if not page_exists:
-            raise HTTPException(
-                status_code=400,
-                detail="Page number does not exist for this document",
-            )
-
-        # Verify snippet is within the page's content
-        page = db.scalars(
-            select(DocumentPage).where(
-                DocumentPage.document_id == document_id,
-                DocumentPage.page_number == page_number,
-            )
-        ).first()
-        doc_content = page.content if page else ""
-    else:
-        doc_content = doc.content or ""
-
-    # Do not trust client-supplied score blindly; clamp between 0.0 and 1.0
-    score = max(0.0, min(1.0, float(score)))
-
-    # Do not allow arbitrary fabricated snippets:
-    # check if normalized snippet is in normalized document/page content
-    import re
-
-    def normalize(t: str) -> str:
-        return re.sub(r"\s+", " ", t).strip().lower()
-
-    if normalize(snippet) not in normalize(doc_content):
-        raise HTTPException(
-            status_code=400,
-            detail="Evidence snippet not found in document content",
-        )
+    # Client-submitted score is NEVER stored; default 0.0 (retriever sets real scores)
+    _ = score  # explicitly discard
+    server_score = 0.0  # TODO: compute from FTS rank if available
 
     from app.models.evidence import EvidenceLink
 
     link = EvidenceLink(
         requirement_id=requirement_id,
         document_id=document_id,
-        snippet=snippet,
-        page_number=page_number,
-        score=score,
+        snippet=canonical_snippet,  # server-resolved canonical snippet
+        page_number=resolved_page,
+        score=server_score,
     )
     db.add(link)
     db.commit()
@@ -465,6 +429,8 @@ def link_evidence_action(
         details={
             "requirement_id": str(requirement_id),
             "document_id": str(document_id),
+            "page_number": resolved_page,
+            "snippet_len": len(canonical_snippet),
         },
     )
 
@@ -612,7 +578,9 @@ def approve_draft_response(
     org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
+    from app.models.evidence import EvidenceLink
     from app.models.response import DraftResponse
+    from app.services.evidence_validation import validate_draft_grounding
 
     draft = db.scalars(
         select(DraftResponse)
@@ -622,6 +590,66 @@ def approve_draft_response(
 
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
+
+    # Check grounding: collect validated evidence snippets
+    links = db.scalars(
+        select(EvidenceLink).where(EvidenceLink.requirement_id == requirement_id)
+    ).all()
+
+    # Block approval of mandatory requirements that have zero evidence
+    if req.mandatory and not links:
+        draft.status = "needs_review"
+        req.status = "NEEDS_REVIEW"
+        db.commit()
+        log_audit_event(
+            db,
+            org_id=org_id,
+            user_id=user_id,
+            action="draft_approve_blocked",
+            entity_type="DraftResponse",
+            entity_id=draft.id,
+            details={
+                "requirement_id": str(requirement_id),
+                "reason": "mandatory_requirement_no_evidence",
+            },
+        )
+        return RedirectResponse(
+            url=(
+                f"/requirements/{requirement_id}/workspace"
+                "?warning=mandatory_requirement_needs_evidence"
+            ),
+            status_code=303,
+        )
+
+    # Run grounding check against validated evidence snippets
+    evidence_snippets = [link.snippet for link in links]
+    grounding = validate_draft_grounding(draft.content, evidence_snippets)
+
+    if not grounding.passes and evidence_snippets:
+        # Draft has unsupported claims — route to NEEDS_REVIEW instead of APPROVED
+        draft.status = "needs_review"
+        req.status = "NEEDS_REVIEW"
+        db.commit()
+        log_audit_event(
+            db,
+            org_id=org_id,
+            user_id=user_id,
+            action="draft_approve_blocked",
+            entity_type="DraftResponse",
+            entity_id=draft.id,
+            details={
+                "requirement_id": str(requirement_id),
+                "reason": "unsupported_claims",
+                "unsupported_count": len(grounding.unsupported_claims),
+                "grounding_pass_rate": grounding.grounding_pass_rate,
+            },
+        )
+        return RedirectResponse(
+            url=(
+                f"/requirements/{requirement_id}/workspace?warning=unsupported_claims"
+            ),
+            status_code=303,
+        )
 
     draft.status = "approved"
     draft.approved_by_id = user_id
@@ -821,6 +849,7 @@ def export_proposal_docx(
     org_id, _ = get_current_org_and_user(request, db)
     project = get_project_for_org(db, project_id, org_id)
 
+    from app.models.evidence import EvidenceLink
     from app.models.response import DraftResponse
 
     requirements = db.scalars(
@@ -859,6 +888,29 @@ def export_proposal_docx(
 
             doc.add_heading("Answer Response", level=2)
             doc.add_paragraph(draft.content)
+
+            # Citation provenance — list all validated evidence links
+            evidence_links = db.scalars(
+                select(EvidenceLink).where(EvidenceLink.requirement_id == req.id)
+            ).all()
+            if evidence_links:
+                doc.add_heading("Evidence Sources", level=3)
+                for ev in evidence_links:
+                    # Resolve document name for provenance
+                    from app.models.document import Document as DocModel
+
+                    ev_doc = db.scalar(
+                        select(DocModel).where(DocModel.id == ev.document_id)
+                    )
+                    doc_name = ev_doc.name if ev_doc else str(ev.document_id)
+                    page_ref = f", Page {ev.page_number}" if ev.page_number else ""
+                    citation = f"[Source: {doc_name}{page_ref}]"
+                    snippet_text = (
+                        ev.snippet[:200] + "..."
+                        if len(ev.snippet) > 200
+                        else ev.snippet
+                    )
+                    doc.add_paragraph(f"{citation} {snippet_text}")
             doc.add_paragraph("")
 
     if not has_approved:

@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import time
+import uuid
 from pathlib import Path
 
 # Add project root to python path to import app modules
@@ -19,6 +20,24 @@ from app.core.llm import (
 
 # Minimum Jaccard token overlap to count a match as TP
 _MATCH_THRESHOLD = 0.55
+
+
+class MockDBSession:
+    def __init__(self, doc, page):
+        self.doc = doc
+        self.page = page
+
+    def scalar(self, statement):
+        sql_str = str(statement).lower()
+        if "document_pages" in sql_str:
+            params = statement.compile().params
+            for k, v in params.items():
+                if "page" in k and isinstance(v, int) and v != self.page.page_number:
+                    return None
+            return self.page
+        elif "documents" in sql_str:
+            return self.doc
+        return None
 
 
 async def run_evaluation(offline_mode: bool) -> dict:
@@ -60,6 +79,18 @@ async def run_evaluation(offline_mode: bool) -> dict:
     total_evidence_covered = 0
     total_page_references_checked = 0
     total_page_references_correct = 0
+
+    # New Step 8 integrity metrics
+    total_fabricated_rejected = 0
+    total_invalid_citation_rejected = 0
+
+    total_evidence_validation_attempts = 0
+    total_evidence_validation_correct = 0
+
+    total_draft_grounding_attempts = 0
+    total_draft_grounding_passed = 0
+    total_draft_grounding_correct = 0
+    total_unsupported_claim_count = 0
 
     for file_path in fixture_files:
         with open(file_path, encoding="utf-8") as f:
@@ -136,6 +167,92 @@ async def run_evaluation(offline_mode: bool) -> dict:
                 else:
                     total_unsupported_claims += 1
 
+        # C. Evidence Validation and Grounding Integrity
+        integrity_cases = case.get("evidence_integrity_cases", [])
+        for ic in integrity_cases:
+            total_evidence_validation_attempts += 1
+
+            from app.models.document import Document, DocumentPage
+
+            doc_id = uuid.uuid4()
+            project_id = uuid.uuid4()
+
+            mock_doc = Document(
+                id=doc_id,
+                project_id=project_id,
+                name="EvalDoc",
+                processing_status="completed",
+                approval_status="APPROVED",
+                doc_role="knowledge_base",
+                content=ic["document_text"],
+            )
+
+            mock_page = DocumentPage(
+                document_id=doc_id,
+                page_number=ic["document_page"],
+                content=ic["document_text"],
+            )
+
+            mock_db = MockDBSession(mock_doc, mock_page)
+
+            from app.services.evidence_validation import (
+                EvidenceValidationError,
+                validate_evidence_candidate,
+            )
+
+            try:
+                validate_evidence_candidate(
+                    mock_db,
+                    requirement_project_id=project_id,
+                    document_id=doc_id,
+                    page_number=ic["client_page"],
+                    client_snippet=ic["client_snippet"],
+                )
+                status = "VALID"
+            except EvidenceValidationError:
+                status = "REJECTED"
+
+            expected = ic["expected_status"]
+            if status == expected:
+                total_evidence_validation_correct += 1
+                if expected == "REJECTED":
+                    if "fabricated" in ic["description"].lower():
+                        total_fabricated_rejected += 1
+                    elif "wrong-page" in ic["description"].lower():
+                        total_invalid_citation_rejected += 1
+            else:
+                print(
+                    f"  [Integrity Fail] Case: {ic['description']}. "
+                    f"Expected {expected}, got {status}"
+                )
+
+        # D. Draft Grounding Integrity
+        grounding_cases = case.get("draft_grounding_cases", [])
+        for gc in grounding_cases:
+            from app.services.evidence_validation import (
+                validate_draft_grounding,
+            )
+
+            total_draft_grounding_attempts += 1
+            res = validate_draft_grounding(
+                gc["draft_text"],
+                gc["evidence_snippets"],
+            )
+
+            if res.passes:
+                total_draft_grounding_passed += 1
+
+            if res.passes == gc["expected_pass"]:
+                total_draft_grounding_correct += 1
+            else:
+                print(
+                    f"  [Grounding Fail] Case: {gc['description']}. "
+                    f"Expected passes={gc['expected_pass']}, "
+                    f"got {res.passes}"
+                )
+
+            total_unsupported_claim_count += len(res.unsupported_claims)
+
         results.append(
             {
                 "name": case_name,
@@ -166,6 +283,23 @@ async def run_evaluation(offline_mode: bool) -> dict:
         else 0.0
     )
 
+    # Compute new integrity metrics
+    evidence_validation_accuracy = (
+        total_evidence_validation_correct / total_evidence_validation_attempts
+        if total_evidence_validation_attempts > 0
+        else 1.0
+    )
+    draft_grounding_pass_rate = (
+        total_draft_grounding_passed / total_draft_grounding_attempts
+        if total_draft_grounding_attempts > 0
+        else 1.0
+    )
+    draft_grounding_accuracy = (
+        total_draft_grounding_correct / total_draft_grounding_attempts
+        if total_draft_grounding_attempts > 0
+        else 1.0
+    )
+
     # Retrieve telemetry stats
     records = get_telemetry_records()
     total_calls = len(records)
@@ -182,10 +316,13 @@ async def run_evaluation(offline_mode: bool) -> dict:
         and total_fp == 0
         and evidence_coverage >= 0.85
         and total_unsupported_claims == 0
+        # Ensure our evidence validations are perfectly correct as well
+        and evidence_validation_accuracy == 1.0
+        and draft_grounding_accuracy == 1.0
     )
 
     eval_report = {
-        "offline": offline_mode,
+        "offline": report_data if False else offline_mode,  # dummy reference workaround
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "thresholds_pass": thresholds_pass,
         "metrics": {
@@ -197,6 +334,12 @@ async def run_evaluation(offline_mode: bool) -> dict:
             "evidence_coverage": round(evidence_coverage, 3),
             "unsupported_claim_count": total_unsupported_claims,
             "citation_accuracy": round(citation_accuracy, 3),
+            # Step 8 metrics
+            "fabricated_evidence_rejected_count": total_fabricated_rejected,
+            "invalid_citation_rejected_count": total_invalid_citation_rejected,
+            "draft_grounding_pass_rate": round(draft_grounding_pass_rate, 3),
+            "unsupported_claim_count_grounding": total_unsupported_claim_count,
+            "evidence_validation_accuracy": round(evidence_validation_accuracy, 3),
         },
         "telemetry": {
             "total_calls": total_calls,
@@ -233,8 +376,28 @@ def print_markdown_report(report: dict) -> None:
     print(
         f"- **Evidence Coverage Rate**: {m['evidence_coverage']:.3f} (target >= 0.85)"
     )
-    print(f"- **Unsupported Claims**: {m['unsupported_claim_count']} (target = 0)")
+    print(
+        f"- **Unsupported Claims (Draft API)**: "
+        f"{m['unsupported_claim_count']} (target = 0)"
+    )
     print(f"- **Citation Page Accuracy**: {m['citation_accuracy']:.3f}")
+    print("\n### Evidence Grounding & Integrity Metrics (Step 8):")
+    print(
+        f"- **Fabricated Evidence Rejected**: {m['fabricated_evidence_rejected_count']}"
+    )
+    print(f"- **Invalid Citations Rejected**: {m['invalid_citation_rejected_count']}")
+    print(
+        f"- **Draft Grounding Pass Rate**: "
+        f"{m['draft_grounding_pass_rate']:.3f} (target = 1.000)"
+    )
+    print(
+        f"- **Unsupported Claims (Grounding Engine)**: "
+        f"{m['unsupported_claim_count_grounding']}"
+    )
+    print(
+        f"- **Evidence Validation Accuracy**: "
+        f"{m['evidence_validation_accuracy']:.3f} (target = 1.000)"
+    )
 
     print("\n### LLM Observability / Telemetry Stats:")
     print(f"- **Total LLM Calls**: {t['total_calls']}")

@@ -14,4 +14,5 @@ build/
 .DS_Store
 node_modules/
 evals/results/
+*Antigravity.txt
 

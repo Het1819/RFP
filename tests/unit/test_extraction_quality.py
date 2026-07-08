@@ -18,10 +18,7 @@ from app.core.llm import FakeLLMProvider
 @pytest.mark.asyncio
 async def test_fake_provider_extract_returns_requirements():
     provider = FakeLLMProvider()
-    text = (
-        "[PAGE 1] Section 1.1\n"
-        "The system must support multi-factor authentication."
-    )
+    text = "[PAGE 1] Section 1.1\nThe system must support multi-factor authentication."
     reqs = await provider.extract_requirements(text)
     assert len(reqs) >= 1
 
@@ -74,9 +71,7 @@ async def test_offline_eval_passes_all_thresholds():
 
     report = await run_evaluation(offline_mode=True)
     m = report["metrics"]
-    assert report["thresholds_pass"] is True, (
-        f"Eval did not pass thresholds: {m}"
-    )
+    assert report["thresholds_pass"] is True, f"Eval did not pass thresholds: {m}"
     assert m["recall"] >= 0.90, f"Recall too low: {m['recall']}"
     assert m["hallucinated_count"] == 0, (
         f"Hallucinations found: {m['hallucinated_count']}"

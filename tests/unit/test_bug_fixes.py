@@ -135,6 +135,7 @@ def test_retrieve_evidence_preserves_hyphens(db):
         file_path="/tmp/kb.pdf",
         file_type="application/pdf",
         doc_role="knowledge_base",
+        processing_status="completed",
         approval_status="APPROVED",
     )
     db.add(doc)

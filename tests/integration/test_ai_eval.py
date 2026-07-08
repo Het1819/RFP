@@ -61,7 +61,7 @@ def test_eval_fixtures_exist():
     """Proves all three golden cases are present and parse correctly."""
     fixtures_dir = Path(__file__).resolve().parent.parent.parent / "evals" / "fixtures"
     fixture_files = list(fixtures_dir.glob("*.json"))
-    assert len(fixture_files) == 3
+    assert len(fixture_files) >= 3
     for file_path in fixture_files:
         with open(file_path, encoding="utf-8") as f:
             case = json.load(f)

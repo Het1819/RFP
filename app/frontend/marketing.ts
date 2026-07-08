@@ -1,6 +1,7 @@
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
 
+// @ts-ignore
 import './marketing.css';
 
 gsap.registerPlugin(ScrollTrigger);
@@ -108,8 +109,6 @@ document.addEventListener('DOMContentLoaded', () => {
         ScrollTrigger.getAll().forEach(t => t.kill());
 
         steps.forEach((step, idx) => {
-            const sceneId = step.getAttribute('data-scene');
-            
             ScrollTrigger.create({
                 trigger: step,
                 start: 'top 45%',

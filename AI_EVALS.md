@@ -20,7 +20,7 @@ Evaluations help prevent regressions such as:
 
 ---
 
-## 2. Current Eval Results (Step 7 — Offline)
+## 2. Current Eval Results (Step 8 — Offline)
 
 | Metric | Result | Threshold |
 |--------|--------|-----------|
@@ -32,6 +32,10 @@ Evaluations help prevent regressions such as:
 | Evidence Coverage | 1.000 | >= 0.85 |
 | Unsupported Claims | 0 | = 0 |
 | Citation Page Accuracy | 1.000 | — |
+| Fabricated Evidence Rejected | 1 | — |
+| Invalid Citations Rejected | 1 | — |
+| Draft Grounding Pass Rate | 0.500 | — |
+| Evidence Validation Accuracy | 1.000 | = 1.000 |
 
 **Pilot Thresholds: PASS**
 
@@ -188,6 +192,10 @@ set ENABLE_REAL_LLM_EVAL=true
 | Citation Accuracy | Correct / Checked | Source page number accuracy |
 | Hallucinated Count | FP | Extracted requirements with no golden match |
 | Missed Count | FN | Golden requirements not found in extraction |
+| Fabricated Evidence Rejected | Count | Fabricated evidence snippets successfully rejected |
+| Invalid Citations Rejected | Count | Wrong-page citations successfully rejected |
+| Draft Grounding Pass Rate | Pass / Attempt | Percentage of drafts that are fully grounded |
+| Evidence Validation Accuracy | Correct / Attempt | Accuracy of evidence validation classifying candidates |
 
 ---
 
@@ -200,3 +208,35 @@ set ENABLE_REAL_LLM_EVAL=true
 | Evidence Coverage | >= 0.85 |
 | Unsupported Claims | = 0 |
 | Citation Accuracy | >= 0.80 (documented; not yet a hard block) |
+| Evidence Validation Accuracy | = 1.000 |
+| Draft Grounding Accuracy | = 1.000 (checker logic classification accuracy) |
+
+---
+
+## 12. Evidence Validation and Citation Integrity (Step 8)
+
+To harden evidence grounding, all evidence linking inputs are validated server-side:
+- **Project Boundary Verification**: Ensures any document linked belongs to the exact same organization and proposal project as the requirement.
+- **Document Integrity Checks**: Rejects deleted, unprocessed, failed, or unapproved documents.
+- **Page Verification**: Validates that the requested `page_number` exists.
+- **Snippet Content Verification**: Normalizes whitespace and case on the snippet and page, and verifies the snippet exists as a substring.
+- **Score Dismissal**: Discards client-provided scores and clamps/computes them server-side.
+
+---
+
+## 13. Draft Grounding Checker
+
+Draft responses are evaluated against validated evidence links to flag unsupported claims:
+- **Sentences Extraction**: Splits draft text into individual sentences and removes common boilerplate compliance phrases (e.g., "we will comply").
+- **Jaccard Token Overlap**: Compares each sentence's tokens to the validated evidence snippets. A sentence must overlap by at least **0.20** Jaccard index to be supported.
+- **Approval Gate Block**: Drafts with unsupported claims or mandatory requirements without any evidence links cannot be approved (routed to `NEEDS_REVIEW`).
+
+---
+
+## 14. Known Limitations & How to Add Eval Cases
+
+- **Sentence splitting**: Currently uses a standard period-based regex. Complex formatting (bullet points, decimal numbers) might split incorrectly.
+- **Semantic alignment**: Exact matching is performed. Synonyms or rephrasings are not resolved unless explicitly present in the document.
+
+### Adding Evidence-Grounding Cases
+Add `evidence_integrity_cases` and `draft_grounding_cases` arrays to any golden case JSON file under `evals/fixtures/` as detailed in `evidence_integrity_rfp.json`.
