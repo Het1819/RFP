@@ -119,6 +119,7 @@ The following matrix must be signed off by the team before launching the pilot:
 | **Triage** | Issue Escalation | Triage workflow and exit templates defined | Verified | PASS |
 | **Commercial** | Paid Conversion Docs | Qualification, pricing, ROI, scripts defined | Verified | PASS |
 | **Sales Ops** | Outreach System | Templates, sequences, scorecards, pipeline defined | Verified | PASS |
+| **Campaign** | Launch Campaign | Account tracker, QA checks, learning logs defined | Verified | PASS |
 
 ---
 
@@ -143,6 +144,20 @@ The following matrix must be signed off by the team before launching the pilot:
 - [ ] **Sales Sequence Cadence:** Follow the 10-business-day schedule and honor opt-out requests within the 1-day SLA.
 - [ ] **Discovery & Demo Scorecards:** Keep qualification scorecards ready for all new calls.
 - [ ] **Claim Safety Guardrails:** Review the prohibited claims section before executing outbound pitches.
+
+---
+
+## 20. Step 17 - First Paid Pilot Campaign Execution Checklist
+
+- [ ] **First 20-Account Batch:** Verify `FIRST_20_ACCOUNT_BATCH_TEMPLATE.csv` placeholder rows and columns match outreach specifications.
+- [ ] **Account Research Worksheets:** Use only approved public sources ( SAM.gov, company website); do not use automated scrapers.
+- [ ] **Outbound QA Verification:** Run QA checklists on every personalized message prior to sending.
+- [ ] **Discovery Evidence Logging:** Document specific customer quote placeholders and WTP evidence in the template.
+- [ ] **Opportunity Memo Review:** Verify opportunity review memos are filled out for GO deals.
+- [ ] **Weekly Campaign Reports:** Maintain weekly performance metrics, segment learning logs, and action items.
+- [ ] **Win/Loss Log:** Audit outcomes and pricing/security reactions in `WIN_LOSS_LEARNING_LOG.csv`.
+- [ ] **Customer Proof Integrity:** Confirm the proof repository enforces written permission requirements and forbids fake reviews.
+
 
 
 

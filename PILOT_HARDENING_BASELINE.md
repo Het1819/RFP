@@ -736,6 +736,56 @@ The next step is **Step 3 (CSRF Protection)**:
 ### Remaining Gaps for Step 17
 * None. Step 16 is complete.
 
+---
+
+## 22. Step 17 - First Paid Pilot Campaign Execution
+
+### Files Changed
+- [PILOT_READINESS_CHECKLIST.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_READINESS_CHECKLIST.md) (appended Step 17 campaign readiness checks).
+
+### Campaign Assets Added
+- [FIRST_20_ACCOUNT_BATCH_TEMPLATE.csv](file:///D:/RFA/Project/rfp-architect-mvp/FIRST_20_ACCOUNT_BATCH_TEMPLATE.csv) (outreach target account batch database with placeholder research rows).
+- [ACCOUNT_RESEARCH_WORKSHEET.md](file:///D:/RFA/Project/rfp-architect-mvp/ACCOUNT_RESEARCH_WORKSHEET.md) (research guidelines detailing allowed public procurement / job listing searches and prohibiting automated scraping).
+- [OUTBOUND_QA_CHECKLIST.md](file:///D:/RFA/Project/rfp-architect-mvp/OUTBOUND_QA_CHECKLIST.md) (QA criteria check list enforcing opt-out notices, role relevance, and no fake compliance claims).
+- [DISCOVERY_MEETING_EVIDENCE_TEMPLATE.md](file:///D:/RFA/Project/rfp-architect-mvp/DISCOVERY_MEETING_EVIDENCE_TEMPLATE.md) (structured template to log client workflow details, user quotes, and WTP indicators).
+- [PILOT_OPPORTUNITY_REVIEW_MEMO.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_OPPORTUNITY_REVIEW_MEMO.md) (deal review memo mapping budget, security fit, proposed pilot package, and risk mitigations).
+- [WEEKLY_CAMPAIGN_REPORT_TEMPLATE.md](file:///D:/RFA/Project/rfp-architect-mvp/WEEKLY_CAMPAIGN_REPORT_TEMPLATE.md) (campaign performance metric report covering funnel stats, segment responses, and objections).
+- [WIN_LOSS_LEARNING_LOG.csv](file:///D:/RFA/Project/rfp-architect-mvp/WIN_LOSS_LEARNING_LOG.csv) (win/loss log tracking deal outcomes, reasons, security reactions, and key lessons).
+- [CUSTOMER_PROOF_REPOSITORY_TEMPLATE.md](file:///D:/RFA/Project/rfp-architect-mvp/CUSTOMER_PROOF_REPOSITORY_TEMPLATE.md) (metric proof template establishing rules prohibiting fake quotes and requiring written permission before marketing).
+- [FIRST_CAMPAIGN_OPERATING_CHECKLIST.md](file:///D:/RFA/Project/rfp-architect-mvp/FIRST_CAMPAIGN_OPERATING_CHECKLIST.md) (step-by-step operating checklist for research, message QA, discovery prep, and deal review conversions).
+- [tests/integration/test_step17_campaign.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_step17_campaign.py) (integration test suite verifying campaign files, CSV column structures, and safety guidelines).
+
+### Campaign Batch Template
+* Fully structures target columns (RFP volume hypothesis, trigger events, data sensitivity levels, template choices, and touch dates) using only synthetic placeholders.
+
+### Account Research Worksheet
+* Clearly limits research to public company resources (website, Job postings, SAM.gov awards) and explicitly prohibits automated scrapers, personal details logging, and private brokers.
+
+### Outbound QA
+* Restricts email and LinkedIn messaging to specific pain angles, enforces 20-minute CTA invites, and requires standard opt-out warnings.
+
+### Customer Proof Repository
+* Enforces strict rules against fabricating quotes and requires verified source audits and signed client release agreements before external use.
+
+### Tests Added
+* Integration tests verify all 9 files are created, contain no API keys, validate CSV structures, check opt-out check points, and verify that no uncertified compliance statements exist in the campaign materials.
+
+### Checks/Tests Results
+* `pytest -q`: PASS (178 tests passed).
+* `ruff check .`: PASS.
+* `ruff format --check .`: PASS.
+* `mypy app`: PASS.
+* `npm run assets:build`: PASS.
+* `npx tsc --noEmit`: PASS.
+* `scripts/run_ai_eval.py --offline`: PASS.
+* `docker compose -f docker-compose.prod.yml config`: PASS.
+* `docker build -t rfp-architect-mvp:pilot .`: PASS.
+* `powershell -ExecutionPolicy Bypass -File scripts/check_all.ps1`: PASS.
+
+### Remaining Gaps for Step 18
+* None. Step 17 is complete.
+
+
 
 
 
