@@ -49,11 +49,14 @@ jobs:
         run: uv run pytest -q
         env:
           APP_ENV: test
-          AUTH_MODE: session
-          SESSION_SECRET_KEY: "test-session-secret-key-32-chars-minimum"
-          APP_SECRET_KEY: "test-app-secret-key-32-chars-minimum"
+          AUTH_MODE: dev
+          SESSION_SECRET_KEY: "test-session-secret-key-for-ci-only-do-not-use-in-production-12345"
+          APP_SECRET_KEY: "test-app-secret-key-for-ci-only-do-not-use-in-production-12345"
           DATABASE_URL: "sqlite:///:memory:"
           REDIS_URL: "redis://localhost:6379/0"
+          LLM_PROVIDER: "fake"
+          QUEUE_ENABLED: "false"
+          ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
 
   frontend-quality:
     runs-on: ubuntu-latest

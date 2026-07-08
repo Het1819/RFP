@@ -54,16 +54,21 @@ def test_pilot_documents_exist():
             )
 
 
-def test_feedback_requires_auth(client):
+def test_feedback_requires_auth(unauthenticated_client, monkeypatch):
+    from app.core.config import settings
+
+    # Force session mode so dev auth fallback does not fire
+    monkeypatch.setattr(settings, "AUTH_MODE", "session")
+
     # Unauthenticated browser GET redirects to /login
-    response = client.get(
+    response = unauthenticated_client.get(
         "/feedback", headers={"accept": "text/html"}, follow_redirects=False
     )
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
 
     # Unauthenticated POST returns 401
-    response = client.post(
+    response = unauthenticated_client.post(
         "/feedback",
         data={"category": "BUG", "severity": "LOW", "message": "test"},
         follow_redirects=False,

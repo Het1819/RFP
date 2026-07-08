@@ -16,6 +16,15 @@ Without StaticPool:
 The `client` fixture intentionally creates a *new* session per request via
 `override_get_db`, rather than sharing the `db` fixture session across threads.
 Both sessions bind to the same StaticPool connection, so they share data.
+
+Authentication notes
+--------------------
+`unauthenticated_client` — bare TestClient with no session. Use for tests that
+explicitly verify unauthenticated / redirect behavior.
+
+`client` — authenticated TestClient. Logs in via the real dev login route using
+a deterministic seed email so tests do not depend on local .env or AUTH_MODE
+state. The fixture requires AUTH_MODE=dev (set in CI env and local .env).
 """
 
 import pytest
@@ -94,36 +103,6 @@ def db():
 
 
 # ---------------------------------------------------------------------------
-# Per-test HTTP client — injects a thread-safe DB override
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture
-def client(db):
-    """Provides a test client with get_db overridden to use the test session.
-
-    The override yields the same `db` session as the test itself.  This is
-    safe because:
-    - StaticPool ensures a single shared in-memory database.
-    - check_same_thread=False allows the same SQLite connection to be used
-      from both the test thread and the TestClient worker thread.
-    - Sharing one session means any db.commit() / db.flush() done in the
-      test is immediately visible to the app's route handlers.
-    """
-
-    def override_get_db():
-        try:
-            yield db
-        finally:
-            pass
-
-    app.dependency_overrides[get_db] = override_get_db
-    with TestClient(app) as test_client:
-        yield test_client
-    app.dependency_overrides.clear()
-
-
-# ---------------------------------------------------------------------------
 # SessionLocal monkeypatch — routes all app SessionLocal() calls to test db
 # ---------------------------------------------------------------------------
 
@@ -156,3 +135,126 @@ def mock_session_local(monkeypatch, db):
         return _SessionProxy()
 
     monkeypatch.setattr("app.core.database.SessionLocal", _session_factory)
+
+
+# ---------------------------------------------------------------------------
+# Unauthenticated HTTP client — no session, no login
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def unauthenticated_client(db):
+    """Bare TestClient with no session injection.
+
+    Use for tests that explicitly verify unauthenticated behavior:
+    - Protected routes redirect to /login
+    - Unauthenticated POST returns 401
+    - Inactive/deleted user fails closed
+    """
+
+    def override_get_db():
+        try:
+            yield db
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app, raise_server_exceptions=True) as test_client:
+        yield test_client
+    app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# Authenticated HTTP client — logs in via real dev login route
+# ---------------------------------------------------------------------------
+
+# Deterministic seed email used by the authenticated client fixture.
+# Must match what the dev login route creates (any email works in dev mode).
+_TEST_AUTH_EMAIL = "ci-fixture@rfparchitect.com"
+
+
+@pytest.fixture
+def client(db):
+    """Authenticated TestClient.
+
+    Authenticates by hitting the real /login route in AUTH_MODE=dev using a
+    deterministic seed email. This is CI-independent: no .env file is read,
+    no AUTH_MODE override is needed, and no production auth bypass is used.
+
+    The dev login route (app/web/routes/auth.py) creates the org/user if they
+    do not exist, so this fixture works in a fresh in-memory database.
+
+    Requirements:
+    - AUTH_MODE must be "dev" (set via CI env var or local .env).
+    - APP_ENV must be "test", "development", or "local".
+
+    Usage in tests:
+    - `client` — authenticated, access protected pages directly.
+    - `unauthenticated_client` — bare, no session.
+    """
+
+    def override_get_db():
+        try:
+            yield db
+        finally:
+            pass
+
+    app.dependency_overrides[get_db] = override_get_db
+    with TestClient(app, raise_server_exceptions=True) as test_client:
+        # Step 1: GET /login to obtain a CSRF token in the session cookie.
+        login_page = test_client.get("/login")
+        assert login_page.status_code == 200, (
+            f"Login page returned {login_page.status_code}; "
+            "check that AUTH_MODE=dev is set."
+        )
+
+        # Extract CSRF token from login form.
+        import re
+
+        csrf_match = re.search(
+            r'name="csrf_token"\s+value="([a-f0-9]+)"', login_page.text
+        )
+        if not csrf_match:
+            csrf_match = re.search(
+                r'value="([a-f0-9]+)"\s+name="csrf_token"', login_page.text
+            )
+        assert csrf_match is not None, (
+            "CSRF token not found in login page HTML. "
+            "The login template must render a csrf_token field."
+        )
+        csrf_token = csrf_match.group(1)
+
+        # Step 2: POST /login with dev email + CSRF token.
+        login_resp = test_client.post(
+            "/login",
+            data={"email": _TEST_AUTH_EMAIL, "csrf_token": csrf_token},
+            headers={"X-Test-Enforce-CSRF": "true"},
+            follow_redirects=False,
+        )
+        assert login_resp.status_code == 303, (
+            f"Dev login returned {login_resp.status_code} "
+            f"(location: {login_resp.headers.get('location', 'N/A')}). "
+            "Ensure AUTH_MODE=dev and the login route is reachable."
+        )
+        assert login_resp.headers.get("location") == "/projects", (
+            f"Dev login redirected to {login_resp.headers.get('location')} "
+            "instead of /projects."
+        )
+
+        # Step 3: Verify authenticated access works.
+        projects_resp = test_client.get("/projects")
+        assert projects_resp.status_code == 200, (
+            f"Authenticated /projects returned {projects_resp.status_code}. "
+            "Session cookie may not have been set correctly."
+        )
+
+        yield test_client
+
+    app.dependency_overrides.clear()
+
+
+# ---------------------------------------------------------------------------
+# Alias for clarity in future tests
+# ---------------------------------------------------------------------------
+
+auth_client = client

@@ -84,14 +84,15 @@ def test_metrics_endpoint(client, db):
     assert "SELECT *" not in content
 
 
-def test_ops_dashboard_requires_auth(client, monkeypatch):
+def test_ops_dashboard_requires_auth(unauthenticated_client, monkeypatch):
     """Proves that accessing /projects/ops/dashboard requires authentication."""
     from app.core.config import settings
 
+    # Force session mode so dev auth fallback does not fire
     monkeypatch.setattr(settings, "AUTH_MODE", "session")
 
     # Unauthorized request redirects to login when HTML is accepted
-    response = client.get(
+    response = unauthenticated_client.get(
         "/projects/ops/dashboard",
         headers={"Accept": "text/html"},
         follow_redirects=False,

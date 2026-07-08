@@ -11,14 +11,14 @@ from app.models.response import DraftResponse
 from tests.integration.test_csrf import extract_csrf_token
 
 
-def test_unauthenticated_assignment_fails(client, db, monkeypatch):
-    """Proves that unauthenticated access is blocked when APP_ENV is production."""
+def test_unauthenticated_assignment_fails(unauthenticated_client, db, monkeypatch):
+    """Proves that unauthenticated access is blocked when session is absent."""
     from app.core.config import settings
 
-    monkeypatch.setattr(settings, "APP_ENV", "production")
-    monkeypatch.setattr(settings, "AUTH_MODE", "production")
+    # Force session mode so dev auth fallback does not fire
+    monkeypatch.setattr(settings, "AUTH_MODE", "session")
 
-    response = client.post(
+    response = unauthenticated_client.post(
         f"/requirements/{uuid.uuid4()}/assign",
         data={"assigned_to_user_id": str(uuid.uuid4())},
         follow_redirects=False,
