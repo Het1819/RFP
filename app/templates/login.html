@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RFP Architect — Sign In</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body style="display: flex; justify-content: center; align-items: center; min-height: 100vh; background: var(--canvas);">
+    <div class="glass-bg"></div>
+    
+    <div class="feature-card" style="width: 100%; max-width: 420px; padding: 2.5rem; box-shadow: var(--shadow-lg), var(--shadow-glow); border-color: var(--border-color); z-index: 10;">
+        <div style="text-align: center; margin-bottom: 2rem;">
+            <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📐</div>
+            <h1 style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary); margin-bottom: 0.25rem;">RFP Architect</h1>
+            <p style="font-size: 0.85rem; color: var(--text-secondary);">Proposal Intelligence Workspace</p>
+        </div>
+        
+        {% if error_msg %}
+            <div style="background: var(--status-needs-evidence-bg); border: 1px solid rgba(180, 35, 24, 0.2); color: var(--status-needs-evidence); padding: 0.75rem 1rem; border-radius: var(--radius-sm); font-size: 0.85rem; margin-bottom: 1.5rem; text-align: center;">
+                {{ error_msg }}
+            </div>
+        {% endif %}
+
+        {% if auth_mode == "dev" %}
+            <div style="background: rgba(18, 105, 211, 0.1); border: 1px solid rgba(18, 105, 211, 0.2); color: var(--accent); padding: 0.75rem 1rem; border-radius: var(--radius-sm); font-size: 0.8rem; margin-bottom: 1.5rem; text-align: center; font-weight: 500;">
+                ⚠️ Development login mode active
+            </div>
+            
+            <form action="/login" method="POST" style="display: flex; flex-direction: column; gap: 1.25rem;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    <label for="email" style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Dev Email</label>
+                    <input type="email" id="email" name="email" required value="default@rfparchitect.com" style="border-radius: var(--radius-sm); padding: 0.6rem 0.75rem; font-size: 0.9rem;">
+                </div>
+                <button type="submit" class="btn btn-primary" style="padding: 0.75rem; font-size: 0.95rem; font-weight: 600; width: 100%;">Sign In as Dev</button>
+            </form>
+        {% elif auth_mode == "session" %}
+            <form action="/login" method="POST" style="display: flex; flex-direction: column; gap: 1.25rem;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    <label for="email" style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Pilot User Email</label>
+                    <input type="email" id="email" name="email" required placeholder="e.g. pilot@rfparchitect.com" style="border-radius: var(--radius-sm); padding: 0.6rem 0.75rem; font-size: 0.9rem;">
+                </div>
+                <button type="submit" class="btn btn-primary" style="padding: 0.75rem; font-size: 0.95rem; font-weight: 600; width: 100%;">Sign In</button>
+            </form>
+        {% elif auth_mode == "oidc" %}
+            <div style="text-align: center; padding: 1rem 0;">
+                <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1.5rem; line-height: 1.5;">SSO authentication is managed via your enterprise OIDC portal.</p>
+                <form action="/login" method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                    <button type="submit" class="btn btn-primary" style="padding: 0.75rem 1.5rem; font-size: 0.95rem; font-weight: 600; width: 100%;">Proceed to Single Sign-On (SSO)</button>
+                </form>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>

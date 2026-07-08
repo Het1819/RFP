@@ -13,3 +13,6 @@ build/
 *.egg-info/
 .DS_Store
 node_modules/
+evals/results/
+*Antigravity.txt
+

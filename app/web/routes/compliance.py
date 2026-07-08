@@ -1,19 +1,45 @@
+import logging
 import uuid
 from enum import StrEnum
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from fastapi.templating import Jinja2Templates
 from pydantic import BeforeValidator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core import security as core_security
+from app.core.config import settings
+from app.core.csrf import validate_csrf_token
 from app.core.database import get_db, get_default_org_and_user
-from app.models.project import ProposalProject
+from app.core.security import (
+    get_project_for_org,
+    get_requirement_for_org,
+)
+from app.core.templates import templates
+from app.models.audit import AuditEvent
+from app.models.comment import RequirementComment
 from app.models.requirement import Requirement
+from app.models.user import User
 from app.services.project_service import log_audit_event
+
+logger = logging.getLogger(__name__)
+
+
+def get_current_org_and_user(
+    request: Request, db: Session
+) -> tuple[uuid.UUID, uuid.UUID]:
+    try:
+        return core_security.get_current_org_and_user(request, db)
+    except HTTPException as e:
+        if e.status_code == 401 and settings.AUTH_MODE == "dev":
+            core_security.check_app_env_auth()
+            logger.warning(
+                "Development authentication active. Falling back to default user/org."
+            )
+            return get_default_org_and_user(db)
+        raise
 
 
 class RequirementStatus(StrEnum):
@@ -23,6 +49,8 @@ class RequirementStatus(StrEnum):
     NEEDS_REVIEW = "NEEDS_REVIEW"
     APPROVED = "APPROVED"
     REJECTED = "REJECTED"
+    IN_REVIEW = "IN_REVIEW"
+    CHANGES_REQUESTED = "CHANGES_REQUESTED"
 
 
 class RiskLevel(StrEnum):
@@ -51,35 +79,59 @@ OptionalRiskLevel = Annotated[RiskLevel | None, BeforeValidator(empty_to_none)]
 
 router = APIRouter(tags=["compliance"])
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-
-def get_requirement_for_org(
-    db: Session, requirement_id: uuid.UUID, org_id: uuid.UUID
-) -> Requirement:
-    req = db.get(Requirement, requirement_id)
-    if not req:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-    project = db.get(ProposalProject, req.project_id)
-    if not project or project.organization_id != org_id:
-        raise HTTPException(status_code=404, detail="Requirement not found")
-    return req
+# get_requirement_for_org is imported from app.core.security
 
 
 @router.get("/projects/{project_id}/matrix", response_class=HTMLResponse)
 def matrix_view(
     request: Request, project_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
-    project = db.get(ProposalProject, project_id)
-    if not project or project.organization_id != org_id:
-        raise HTTPException(status_code=404, detail="Project not found")
+    org_id, user_id = get_current_org_and_user(request, db)
+    project = get_project_for_org(db, project_id, org_id)
+
+    # 1. Fetch all requirements for the project to calculate filter counts
+    all_reqs = db.scalars(
+        select(Requirement).where(Requirement.project_id == project_id)
+    ).all()
+
+    assigned_to_me_count = sum(1 for r in all_reqs if r.assigned_to_user_id == user_id)
+    unassigned_count = sum(1 for r in all_reqs if r.assigned_to_user_id is None)
+    needs_evidence_count = sum(1 for r in all_reqs if r.status == "NEEDS_EVIDENCE")
+    needs_review_count = sum(1 for r in all_reqs if r.status == "NEEDS_REVIEW")
+    changes_requested_count = sum(
+        1 for r in all_reqs if r.status == "CHANGES_REQUESTED"
+    )
+    approved_count = sum(1 for r in all_reqs if r.status == "APPROVED")
+    rejected_count = sum(1 for r in all_reqs if r.status == "REJECTED")
+
+    import datetime
+
+    is_overdue = False
+    if project.due_date:
+        is_overdue = datetime.datetime.now(datetime.UTC) > project.due_date
+
+    # 2. Apply filtering
+    filter_param = request.query_params.get("filter")
+    query = select(Requirement).where(Requirement.project_id == project_id)
+
+    if filter_param == "assigned_to_me":
+        query = query.where(Requirement.assigned_to_user_id == user_id)
+    elif filter_param == "unassigned":
+        query = query.where(Requirement.assigned_to_user_id.is_(None))
+    elif filter_param == "needs_evidence":
+        query = query.where(Requirement.status == "NEEDS_EVIDENCE")
+    elif filter_param == "needs_review":
+        query = query.where(Requirement.status == "NEEDS_REVIEW")
+    elif filter_param == "changes_requested":
+        query = query.where(Requirement.status == "CHANGES_REQUESTED")
+    elif filter_param == "approved":
+        query = query.where(Requirement.status == "APPROVED")
+    elif filter_param == "rejected":
+        query = query.where(Requirement.status == "REJECTED")
 
     requirements = db.scalars(
-        select(Requirement)
-        .where(Requirement.project_id == project_id)
-        .order_by(Requirement.source_page.asc(), Requirement.created_at.asc())
+        query.order_by(Requirement.source_page.asc(), Requirement.created_at.asc())
     ).all()
 
     error_msg = request.query_params.get("error")
@@ -91,6 +143,16 @@ def matrix_view(
             "project": project,
             "requirements": requirements,
             "error_msg": error_msg,
+            "total_count": len(all_reqs),
+            "assigned_to_me_count": assigned_to_me_count,
+            "unassigned_count": unassigned_count,
+            "needs_evidence_count": needs_evidence_count,
+            "needs_review_count": needs_review_count,
+            "changes_requested_count": changes_requested_count,
+            "approved_count": approved_count,
+            "rejected_count": rejected_count,
+            "is_overdue": is_overdue,
+            "current_filter": filter_param or "",
         },
     )
 
@@ -99,7 +161,7 @@ def matrix_view(
 def edit_requirement_row(
     request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
+    org_id, _ = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
     return templates.TemplateResponse(
         request=request,
@@ -108,7 +170,11 @@ def edit_requirement_row(
     )
 
 
-@router.post("/requirements/{requirement_id}/edit", response_class=HTMLResponse)
+@router.post(
+    "/requirements/{requirement_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def update_requirement_action(
     request: Request,
     requirement_id: uuid.UUID,
@@ -123,7 +189,7 @@ def update_requirement_action(
     risk_level: OptionalRiskLevel = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     old_details = {
@@ -171,7 +237,7 @@ def update_requirement_action(
 def cancel_edit_row(
     request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
+    org_id, _ = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
     return templates.TemplateResponse(
         request=request,
@@ -180,11 +246,15 @@ def cancel_edit_row(
     )
 
 
-@router.delete("/requirements/{requirement_id}", response_class=HTMLResponse)
+@router.delete(
+    "/requirements/{requirement_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def delete_requirement_action(
-    requirement_id: uuid.UUID, db: Session = Depends(get_db)
+    request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
     db.delete(req)
     db.commit()
@@ -202,9 +272,14 @@ def delete_requirement_action(
     return HTMLResponse(content="")
 
 
-@router.post("/projects/{project_id}/matrix/merge", response_class=RedirectResponse)
+@router.post(
+    "/projects/{project_id}/matrix/merge",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def merge_requirements_action(
     project_id: uuid.UUID,
+    request: Request,
     ids: list[str] = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
@@ -215,12 +290,18 @@ def merge_requirements_action(
             status_code=303,
         )
 
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
+    project = get_project_for_org(db, project_id, org_id)
     req_ids = [uuid.UUID(i) for i in ids]
 
-    reqs = db.scalars(select(Requirement).where(Requirement.id.in_(req_ids))).all()
+    reqs = db.scalars(
+        select(Requirement).where(
+            Requirement.id.in_(req_ids),
+            Requirement.project_id == project.id,
+        )
+    ).all()
 
-    if not reqs:
+    if len(reqs) != len(req_ids):
         raise HTTPException(status_code=404, detail="No requirements found")
 
     merged_text = "\n[Merged] ".join([r.original_text for r in reqs])
@@ -246,13 +327,18 @@ def merge_requirements_action(
     return RedirectResponse(url=f"/projects/{project_id}/matrix", status_code=303)
 
 
-@router.post("/requirements/{requirement_id}/split", response_class=RedirectResponse)
+@router.post(
+    "/requirements/{requirement_id}/split",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def split_requirement_action(
     requirement_id: uuid.UUID,
+    request: Request,
     split_text: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     secondary = Requirement(
@@ -291,9 +377,9 @@ def split_requirement_action(
 def requirement_workspace_view(
     request: Request, requirement_id: uuid.UUID, db: Session = Depends(get_db)
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
-    project = db.get(ProposalProject, req.project_id)
+    project = get_project_for_org(db, req.project_id, org_id)
 
     # Run retrieval
     from app.services.retriever import retrieve_evidence
@@ -321,6 +407,30 @@ def requirement_workspace_view(
         .order_by(DraftResponse.version.desc())
     ).first()
 
+    # Get org users for reviewer assignment dropdown
+    users = db.scalars(
+        select(User)
+        .where(User.organization_id == org_id)
+        .order_by(User.full_name.asc())
+    ).all()
+
+    # Get requirement comments
+    comments = db.scalars(
+        select(RequirementComment)
+        .where(RequirementComment.requirement_id == requirement_id)
+        .order_by(RequirementComment.created_at.desc())
+    ).all()
+
+    # Get recent audit events
+    recent_audits = db.scalars(
+        select(AuditEvent)
+        .where(AuditEvent.entity_id == requirement_id)
+        .order_by(AuditEvent.created_at.desc())
+        .limit(10)
+    ).all()
+
+    warning = request.query_params.get("warning")
+
     return templates.TemplateResponse(
         request=request,
         name="projects/requirement_workspace.html",
@@ -331,6 +441,11 @@ def requirement_workspace_view(
             "linked_evidence": linked_evidence,
             "draft": draft,
             "search_query": search_query,
+            "users": users,
+            "comments": comments,
+            "recent_audits": recent_audits,
+            "warning": warning,
+            "current_user_id": user_id,
         },
     )
 
@@ -338,26 +453,54 @@ def requirement_workspace_view(
 @router.post(
     "/requirements/{requirement_id}/evidence/link",
     response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
 )
 def link_evidence_action(
     requirement_id: uuid.UUID,
+    request: Request,
     document_id: uuid.UUID = Form(...),
     snippet: str = Form(...),
     page_number: int = Form(None),
+    # client score is ignored — clamped/recomputed server-side
     score: float = Form(0.0),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
-    _ = get_requirement_for_org(db, requirement_id, org_id)
+    org_id, user_id = get_current_org_and_user(request, db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
+
+    # Validate evidence candidate server-side — never trust client snippet/page/score
+    from app.services.evidence_validation import (
+        EvidenceValidationError,
+        validate_evidence_candidate,
+    )
+
+    try:
+        canonical_snippet, resolved_page = validate_evidence_candidate(
+            db,
+            requirement_project_id=req.project_id,
+            document_id=document_id,
+            page_number=page_number,
+            client_snippet=snippet,
+        )
+    except EvidenceValidationError as exc:
+        from app.core.observability import MetricsRegistry
+
+        MetricsRegistry.evidence_validation_failures += 1
+        logger.warning(f"Evidence validation failed: {exc.detail}")
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+    # Client-submitted score is NEVER stored; default 0.0 (retriever sets real scores)
+    _ = score  # explicitly discard
+    server_score = 0.0  # TODO: compute from FTS rank if available
 
     from app.models.evidence import EvidenceLink
 
     link = EvidenceLink(
         requirement_id=requirement_id,
         document_id=document_id,
-        snippet=snippet,
-        page_number=page_number,
-        score=score,
+        snippet=canonical_snippet,  # server-resolved canonical snippet
+        page_number=resolved_page,
+        score=server_score,
     )
     db.add(link)
     db.commit()
@@ -372,6 +515,8 @@ def link_evidence_action(
         details={
             "requirement_id": str(requirement_id),
             "document_id": str(document_id),
+            "page_number": resolved_page,
+            "snippet_len": len(canonical_snippet),
         },
     )
 
@@ -380,12 +525,17 @@ def link_evidence_action(
     )
 
 
-@router.post("/requirements/{requirement_id}/draft", response_class=RedirectResponse)
+@router.post(
+    "/requirements/{requirement_id}/draft",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 async def draft_requirement_response(
     requirement_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.evidence import EvidenceLink
@@ -458,14 +608,17 @@ async def draft_requirement_response(
 
 
 @router.post(
-    "/requirements/{requirement_id}/draft/edit", response_class=RedirectResponse
+    "/requirements/{requirement_id}/draft/edit",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
 )
 def edit_draft_response(
     requirement_id: uuid.UUID,
+    request: Request,
     content: str = Form(...),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.response import DraftResponse
@@ -478,8 +631,6 @@ def edit_draft_response(
 
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
-
-    org_id, user_id = get_default_org_and_user(db)
 
     draft.content = content
     req.status = "DRAFTED"
@@ -501,16 +652,21 @@ def edit_draft_response(
 
 
 @router.post(
-    "/requirements/{requirement_id}/draft/approve", response_class=RedirectResponse
+    "/requirements/{requirement_id}/draft/approve",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
 )
 def approve_draft_response(
     requirement_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
+    from app.models.evidence import EvidenceLink
     from app.models.response import DraftResponse
+    from app.services.evidence_validation import validate_draft_grounding
 
     draft = db.scalars(
         select(DraftResponse)
@@ -521,7 +677,68 @@ def approve_draft_response(
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
 
-    org_id, user_id = get_default_org_and_user(db)
+    # Check grounding: collect validated evidence snippets
+    links = db.scalars(
+        select(EvidenceLink).where(EvidenceLink.requirement_id == requirement_id)
+    ).all()
+
+    # Block approval of mandatory requirements that have zero evidence
+    if req.mandatory and not links:
+        draft.status = "needs_review"
+        req.status = "NEEDS_REVIEW"
+        db.commit()
+        log_audit_event(
+            db,
+            org_id=org_id,
+            user_id=user_id,
+            action="draft_approve_blocked",
+            entity_type="DraftResponse",
+            entity_id=draft.id,
+            details={
+                "requirement_id": str(requirement_id),
+                "reason": "mandatory_requirement_no_evidence",
+            },
+        )
+        return RedirectResponse(
+            url=(
+                f"/requirements/{requirement_id}/workspace"
+                "?warning=mandatory_requirement_needs_evidence"
+            ),
+            status_code=303,
+        )
+
+    # Run grounding check against validated evidence snippets
+    evidence_snippets = [link.snippet for link in links]
+    grounding = validate_draft_grounding(draft.content, evidence_snippets)
+
+    if not grounding.passes and evidence_snippets:
+        from app.core.observability import MetricsRegistry
+
+        MetricsRegistry.evidence_validation_failures += 1
+        # Draft has unsupported claims — route to NEEDS_REVIEW instead of APPROVED
+        draft.status = "needs_review"
+        req.status = "NEEDS_REVIEW"
+        db.commit()
+        log_audit_event(
+            db,
+            org_id=org_id,
+            user_id=user_id,
+            action="draft_approve_blocked",
+            entity_type="DraftResponse",
+            entity_id=draft.id,
+            details={
+                "requirement_id": str(requirement_id),
+                "reason": "unsupported_claims",
+                "unsupported_count": len(grounding.unsupported_claims),
+                "grounding_pass_rate": grounding.grounding_pass_rate,
+            },
+        )
+        return RedirectResponse(
+            url=(
+                f"/requirements/{requirement_id}/workspace?warning=unsupported_claims"
+            ),
+            status_code=303,
+        )
 
     draft.status = "approved"
     draft.approved_by_id = user_id
@@ -538,19 +755,33 @@ def approve_draft_response(
         details={"requirement_id": str(requirement_id)},
     )
 
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="REVIEW_APPROVED",
+        entity_type="Requirement",
+        entity_id=req.id,
+        details={"draft_response_id": str(draft.id)},
+    )
+
     return RedirectResponse(
         url=f"/requirements/{requirement_id}/workspace", status_code=303
     )
 
 
 @router.post(
-    "/requirements/{requirement_id}/draft/reject", response_class=RedirectResponse
+    "/requirements/{requirement_id}/draft/reject",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
 )
 def reject_draft_response(
     requirement_id: uuid.UUID,
+    request: Request,
+    reason: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
     from app.models.response import DraftResponse
@@ -564,10 +795,21 @@ def reject_draft_response(
     if not draft:
         raise HTTPException(status_code=404, detail="Draft not found")
 
-    org_id, user_id = get_default_org_and_user(db)
-
     draft.status = "rejected"
     req.status = "REJECTED"
+
+    reason_text = reason.strip() if reason else ""
+    if reason_text:
+        from app.models.comment import RequirementComment
+
+        comment = RequirementComment(
+            requirement_id=requirement_id,
+            author_user_id=user_id,
+            content=reason_text,
+            decision_type="REJECTED",
+        )
+        db.add(comment)
+
     db.commit()
 
     log_audit_event(
@@ -580,6 +822,16 @@ def reject_draft_response(
         details={"requirement_id": str(requirement_id)},
     )
 
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="REVIEW_REJECTED",
+        entity_type="Requirement",
+        entity_id=req.id,
+        details={"reason": reason_text or "No reason provided"},
+    )
+
     return RedirectResponse(
         url=f"/requirements/{requirement_id}/workspace", status_code=303
     )
@@ -588,31 +840,70 @@ def reject_draft_response(
 @router.post(
     "/requirements/{requirement_id}/draft/regenerate",
     response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
 )
 async def regenerate_draft_response(
     requirement_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    return await draft_requirement_response(requirement_id, db)
+    return await draft_requirement_response(requirement_id, request, db)
 
 
-@router.post("/requirements/{requirement_id}/assign", response_class=RedirectResponse)
+@router.post(
+    "/requirements/{requirement_id}/assign",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def assign_requirement_reviewer(
     requirement_id: uuid.UUID,
-    reviewer_name: str = Form(...),
+    request: Request,
+    assigned_to_user_id: str = Form(None),
+    reviewer_name: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, user_id = get_default_org_and_user(db)
+    org_id, user_id = get_current_org_and_user(request, db)
     req = get_requirement_for_org(db, requirement_id, org_id)
 
-    req.owner_name = reviewer_name
+    target_user_id = None
+    target_name = None
+
+    if assigned_to_user_id and assigned_to_user_id != "unassign":
+        try:
+            target_uuid = uuid.UUID(assigned_to_user_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=400, detail="Invalid user ID format"
+            ) from None
+
+        target_user = db.scalar(
+            select(User).where(User.id == target_uuid, User.organization_id == org_id)
+        )
+        if not target_user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        target_user_id = target_user.id
+        target_name = target_user.full_name
+    elif reviewer_name:
+        # Fallback for backward compatibility tests
+        target_name = reviewer_name
+
+    req.assigned_to_user_id = target_user_id
+    req.assigned_by_user_id = user_id
+    import datetime
+
+    req.assigned_at = datetime.datetime.now(datetime.UTC) if target_user_id else None
+    req.owner_name = target_name
+
+    # Set status to NEEDS_REVIEW when assigned
     req.status = "NEEDS_REVIEW"
 
     from app.models.review import ReviewTask
 
     task = ReviewTask(
         requirement_id=requirement_id,
-        reviewer_notes=f"Routed to {reviewer_name} for review.",
+        assigned_to_id=target_user_id,
+        reviewer_notes=f"Routed to {target_name or 'unassigned'} for review.",
         status="open",
     )
     db.add(task)
@@ -622,11 +913,26 @@ def assign_requirement_reviewer(
         db,
         org_id=org_id,
         user_id=user_id,
+        action="REVIEW_ASSIGNED",
+        entity_type="Requirement",
+        entity_id=requirement_id,
+        details={
+            "reviewer_name": target_name,
+            "reviewer_user_id": str(target_user_id) if target_user_id else None,
+            "review_task_id": str(task.id),
+        },
+    )
+
+    # Maintain old audit action for backward compatibility tests
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
         action="requirement_assign",
         entity_type="Requirement",
         entity_id=requirement_id,
         details={
-            "reviewer_name": reviewer_name,
+            "reviewer_name": target_name,
             "review_task_id": str(task.id),
         },
     )
@@ -636,15 +942,257 @@ def assign_requirement_reviewer(
     )
 
 
+@router.post(
+    "/requirements/{requirement_id}/review/start",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
+def start_review_action(
+    requirement_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    org_id, user_id = get_current_org_and_user(request, db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
+
+    req.status = "IN_REVIEW"
+    db.commit()
+
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="REVIEW_STARTED",
+        entity_type="Requirement",
+        entity_id=req.id,
+        details={"status": "IN_REVIEW"},
+    )
+    return RedirectResponse(
+        url=f"/requirements/{requirement_id}/workspace", status_code=303
+    )
+
+
+@router.post(
+    "/requirements/{requirement_id}/review/changes-requested",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
+def request_changes_action(
+    requirement_id: uuid.UUID,
+    request: Request,
+    reason: str = Form(...),
+    db: Session = Depends(get_db),
+) -> Any:
+    org_id, user_id = get_current_org_and_user(request, db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
+
+    reason_stripped = reason.strip()
+    if not reason_stripped:
+        raise HTTPException(status_code=400, detail="Reason cannot be empty")
+
+    if len(reason_stripped) > 4000:
+        raise HTTPException(status_code=400, detail="Reason is too long")
+
+    req.status = "CHANGES_REQUESTED"
+
+    from app.models.response import DraftResponse
+
+    draft = db.scalars(
+        select(DraftResponse)
+        .where(DraftResponse.requirement_id == requirement_id)
+        .order_by(DraftResponse.version.desc())
+    ).first()
+    if draft:
+        draft.status = "changes_requested"
+
+    from app.models.comment import RequirementComment
+
+    comment = RequirementComment(
+        requirement_id=requirement_id,
+        author_user_id=user_id,
+        content=reason_stripped,
+        decision_type="CHANGES_REQUESTED",
+    )
+    db.add(comment)
+    db.commit()
+
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="REVIEW_CHANGES_REQUESTED",
+        entity_type="Requirement",
+        entity_id=req.id,
+        details={"reason": reason_stripped[:200]},
+    )
+    return RedirectResponse(
+        url=f"/requirements/{requirement_id}/workspace", status_code=303
+    )
+
+
+@router.post(
+    "/requirements/{requirement_id}/review/reject",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
+def reject_review_action(
+    requirement_id: uuid.UUID,
+    request: Request,
+    reason: str = Form(...),
+    db: Session = Depends(get_db),
+) -> Any:
+    org_id, user_id = get_current_org_and_user(request, db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
+
+    reason_stripped = reason.strip()
+    if not reason_stripped:
+        raise HTTPException(status_code=400, detail="Reason cannot be empty")
+
+    if len(reason_stripped) > 4000:
+        raise HTTPException(status_code=400, detail="Reason is too long")
+
+    req.status = "REJECTED"
+
+    from app.models.response import DraftResponse
+
+    draft = db.scalars(
+        select(DraftResponse)
+        .where(DraftResponse.requirement_id == requirement_id)
+        .order_by(DraftResponse.version.desc())
+    ).first()
+    if draft:
+        draft.status = "rejected"
+
+    from app.models.comment import RequirementComment
+
+    comment = RequirementComment(
+        requirement_id=requirement_id,
+        author_user_id=user_id,
+        content=reason_stripped,
+        decision_type="REJECTED",
+    )
+    db.add(comment)
+    db.commit()
+
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="REVIEW_REJECTED",
+        entity_type="Requirement",
+        entity_id=req.id,
+        details={"reason": reason_stripped[:200]},
+    )
+    return RedirectResponse(
+        url=f"/requirements/{requirement_id}/workspace", status_code=303
+    )
+
+
+@router.post(
+    "/requirements/{requirement_id}/review/reopen",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
+def reopen_review_action(
+    requirement_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    org_id, user_id = get_current_org_and_user(request, db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
+
+    req.status = "NEEDS_REVIEW"
+
+    from app.models.response import DraftResponse
+
+    draft = db.scalars(
+        select(DraftResponse)
+        .where(DraftResponse.requirement_id == requirement_id)
+        .order_by(DraftResponse.version.desc())
+    ).first()
+    if draft:
+        draft.status = "draft"
+
+    db.commit()
+
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="REVIEW_REOPENED",
+        entity_type="Requirement",
+        entity_id=req.id,
+        details={"status": "NEEDS_REVIEW"},
+    )
+    return RedirectResponse(
+        url=f"/requirements/{requirement_id}/workspace", status_code=303
+    )
+
+
+@router.post(
+    "/requirements/{requirement_id}/comments",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
+def add_comment_action(
+    requirement_id: uuid.UUID,
+    request: Request,
+    content: str = Form(...),
+    db: Session = Depends(get_db),
+) -> Any:
+    org_id, user_id = get_current_org_and_user(request, db)
+    req = get_requirement_for_org(db, requirement_id, org_id)
+
+    content_stripped = content.strip()
+    if not content_stripped:
+        raise HTTPException(status_code=400, detail="Comment cannot be empty")
+
+    if len(content_stripped) > 4000:
+        raise HTTPException(status_code=400, detail="Comment is too long")
+
+    from app.models.comment import RequirementComment
+
+    comment = RequirementComment(
+        requirement_id=requirement_id,
+        author_user_id=user_id,
+        content=content_stripped,
+        decision_type="NOTE",
+    )
+    db.add(comment)
+    db.commit()
+
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="REVIEW_NOTE_ADDED",
+        entity_type="Requirement",
+        entity_id=req.id,
+        details={"comment_id": str(comment.id)},
+    )
+    return RedirectResponse(
+        url=f"/requirements/{requirement_id}/workspace", status_code=303
+    )
+
+
 @router.get("/projects/{project_id}/export/matrix")
 def export_compliance_matrix(
     project_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
-    project = db.get(ProposalProject, project_id)
-    if not project or project.organization_id != org_id:
-        raise HTTPException(status_code=404, detail="Project not found")
+    org_id, user_id = get_current_org_and_user(request, db)
+    _ = get_project_for_org(db, project_id, org_id)
+
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="EXPORT_COMPLIANCE_MATRIX",
+        entity_type="Project",
+        entity_id=project_id,
+        details={"format": "xlsx"},
+    )
 
     requirements = db.scalars(
         select(Requirement)
@@ -708,13 +1256,23 @@ def export_compliance_matrix(
 @router.get("/projects/{project_id}/export/proposal")
 def export_proposal_docx(
     project_id: uuid.UUID,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> Any:
-    org_id, _ = get_default_org_and_user(db)
-    project = db.get(ProposalProject, project_id)
-    if not project or project.organization_id != org_id:
-        raise HTTPException(status_code=404, detail="Project not found")
+    org_id, user_id = get_current_org_and_user(request, db)
+    project = get_project_for_org(db, project_id, org_id)
 
+    log_audit_event(
+        db,
+        org_id=org_id,
+        user_id=user_id,
+        action="EXPORT_PROPOSAL_DOCX",
+        entity_type="Project",
+        entity_id=project_id,
+        details={"format": "docx"},
+    )
+
+    from app.models.evidence import EvidenceLink
     from app.models.response import DraftResponse
 
     requirements = db.scalars(
@@ -741,18 +1299,58 @@ def export_proposal_docx(
             select(DraftResponse)
             .where(
                 DraftResponse.requirement_id == req.id,
-                DraftResponse.status == "approved",
             )
             .order_by(DraftResponse.version.desc())
         ).first()
 
-        if draft:
+        is_approved = draft and draft.status == "approved"
+
+        if is_approved:
             has_approved = True
             doc.add_heading(f"Requirement: {req.source_section or 'General'}", level=1)
             doc.add_paragraph(req.original_text, style="Normal")
 
             doc.add_heading("Answer Response", level=2)
-            doc.add_paragraph(draft.content)
+            doc.add_paragraph(draft.content)  # type: ignore[union-attr]
+
+            # Citation provenance — list all validated evidence links
+            evidence_links = db.scalars(
+                select(EvidenceLink).where(EvidenceLink.requirement_id == req.id)
+            ).all()
+            if evidence_links:
+                doc.add_heading("Evidence Sources", level=3)
+                for ev in evidence_links:
+                    # Resolve document name for provenance
+                    from app.models.document import Document as DocModel
+
+                    ev_doc = db.scalar(
+                        select(DocModel).where(DocModel.id == ev.document_id)
+                    )
+                    doc_name = ev_doc.name if ev_doc else str(ev.document_id)
+                    page_ref = f", Page {ev.page_number}" if ev.page_number else ""
+                    citation = f"[Source: {doc_name}{page_ref}]"
+                    snippet_text = (
+                        ev.snippet[:200] + "..."
+                        if len(ev.snippet) > 200
+                        else ev.snippet
+                    )
+                    doc.add_paragraph(f"{citation} {snippet_text}")
+            doc.add_paragraph("")
+        else:
+            # Mark clearly in export
+            status_label = (
+                f" [{req.status}]"
+                if req.status
+                in ("NEEDS_REVIEW", "CHANGES_REQUESTED", "REJECTED", "NEEDS_EVIDENCE")
+                else " [NOT STARTED]"
+            )
+            doc.add_heading(
+                f"Requirement: {req.source_section or 'General'}{status_label}", level=1
+            )
+            doc.add_paragraph(req.original_text, style="Normal")
+
+            doc.add_heading("Answer Response (Not Approved)", level=2)
+            doc.add_paragraph("No response approved yet.")
             doc.add_paragraph("")
 
     if not has_approved:

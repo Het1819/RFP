@@ -44,7 +44,7 @@
     </td>
     <td style="text-align: right;" data-label="Actions">
         <div style="display: inline-flex; gap: 0.35rem; justify-content: flex-end; flex-wrap: wrap;">
-            <button type="button" hx-post="/requirements/{{ req.id }}/edit" hx-include="closest tr" hx-target="#req-row-{{ req.id }}" hx-swap="outerHTML" class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; border-radius: var(--radius-sm);">Save</button>
+            <button type="button" hx-post="/requirements/{{ req.id }}/edit" hx-headers='{"X-CSRF-Token": "{{ csrf_token(request) }}"}' hx-include="closest tr" hx-target="#req-row-{{ req.id }}" hx-swap="outerHTML" class="btn btn-primary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; border-radius: var(--radius-sm);">Save</button>
             <button type="button" hx-get="/requirements/{{ req.id }}/cancel" hx-target="#req-row-{{ req.id }}" hx-swap="outerHTML" class="btn btn-secondary" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; border-radius: var(--radius-sm);">Cancel</button>
         </div>
     </td>

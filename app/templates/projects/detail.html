@@ -37,6 +37,12 @@
                         <span>Landing Page</span>
                     </a>
                 </li>
+                <li>
+                    <a href="/logout" class="sidebar-link">
+                        <span style="font-size: 1.1rem;">🚪</span>
+                        <span>Sign Out</span>
+                    </a>
+                </li>
             </ul>
             
             <div style="margin-top: auto; padding-top: var(--space-md); border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: var(--space-xs);">
@@ -114,7 +120,7 @@
                 <!-- 2. Dynamic Workflow Progress Stepper -->
                 {% set active_step = 1 %}
                 {% if document %}
-                    {% if document.processing_status == 'processing' %}
+                    {% if document.processing_status in ('pending', 'processing') %}
                         {% set active_step = 2 %}
                     {% elif document.processing_status == 'completed' %}
                         {% set active_step = 4 %}
@@ -275,6 +281,7 @@
                                 <h4 style="font-size: 0.85rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em; margin-bottom: var(--space-md);">Upload reference material</h4>
                                 
                                 <form action="/projects/{{ project.id }}/knowledge" method="POST" enctype="multipart/form-data" style="display: flex; flex-direction: column; gap: var(--space-sm);">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                     <div style="display: flex; flex-direction: column; gap: 4px;">
                                         <label for="k-file" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">File (PDF/DOCX)*</label>
                                         <input type="file" id="k-file" name="file" accept=".pdf,.docx" required style="font-size: 0.85rem; padding: var(--space-xs); background: var(--surface-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); color: var(--text-primary);">

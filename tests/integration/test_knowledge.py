@@ -31,7 +31,7 @@ def test_knowledge_base_flow(client, db):
         source_section="Sec 3.1",
         source_page=2,
         requirement_type="Technical",
-        mandatory=True,
+        mandatory=False,
         status="NOT_STARTED",
     )
     db.add(req)

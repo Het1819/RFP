@@ -57,6 +57,7 @@
             </div>
             <nav style="display: flex; align-items: center; gap: 1rem;">
                 <a href="/projects/{{ project.id }}/matrix" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Compliance Matrix</a>
+                <a href="/logout" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Sign Out</a>
                 <span class="badge">MVP v0.1.0</span>
             </nav>
         </header>
@@ -64,6 +65,21 @@
         <main style="padding-top: 2rem;">
             <!-- Back link -->
             <a href="/projects/{{ project.id }}/matrix" style="text-decoration: none; color: var(--text-muted); font-size: 0.9rem; display: inline-flex; align-items: center; gap: 0.25rem; margin-bottom: 1.5rem;">&larr; Back to Compliance Matrix</a>
+
+            {% if warning %}
+            <div style="background: rgba(180, 35, 24, 0.1); border: 1px solid rgba(180, 35, 24, 0.3); color: var(--status-needs-evidence); padding: 1rem 1.25rem; border-radius: 8px; margin-bottom: 1.5rem; font-size: 0.95rem; font-weight: 600;">
+                <span>⚠️</span>
+                <span>
+                {% if warning == 'mandatory_requirement_needs_evidence' %}
+                    WARNING: Mandatory requirements must have at least one validated evidence link before approval.
+                {% elif warning == 'unsupported_claims' %}
+                    WARNING: Draft response contains unsupported claims. Verify token overlap against evidence.
+                {% else %}
+                    WARNING: {{ warning }}
+                {% endif %}
+                </span>
+            </div>
+            {% endif %}
 
             <div style="margin-bottom: 1.5rem;">
                 <h1 style="font-size: 2rem; font-weight: 700; color: var(--text-primary); letter-spacing: -0.02em; margin-bottom: 0.25rem;">Requirement Workspace</h1>
@@ -134,6 +150,73 @@
                             </div>
                         {% endif %}
                     </div>
+
+                    <!-- Review Notes & Comments Card -->
+                    <div class="feature-card" style="margin-top: 0; padding: 2rem;">
+                        <h3 style="font-size: 1.25rem; font-weight: 600; color: var(--text-primary); margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>💬</span> Review Comments & Notes
+                        </h3>
+
+                        <!-- Add Comment form -->
+                        <form action="/requirements/{{ req.id }}/comments" method="POST" style="display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.5rem;">
+                            <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                            <textarea name="content" required placeholder="Add a note or comment for the review trail..." class="form-control" style="font-size: 0.9rem; height: 80px; resize: vertical;"></textarea>
+                            <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1.25rem; font-size: 0.85rem; align-self: flex-end;">Post Note</button>
+                        </form>
+
+                        <!-- Comments history -->
+                        <div style="display: flex; flex-direction: column; gap: 1rem; max-height: 300px; overflow-y: auto; padding-right: 0.25rem;">
+                            {% if not comments %}
+                                <p style="color: var(--text-secondary); font-size: 0.9rem;">No review comments posted yet.</p>
+                            {% else %}
+                                {% for comment in comments %}
+                                    <div style="background: var(--surface-tertiary); border: 1px solid var(--border-color); padding: 1rem; border-radius: 8px;">
+                                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                                            <strong style="font-size: 0.85rem; color: var(--text-primary);">
+                                                {% set author_found = false %}
+                                                {% for u in users %}
+                                                    {% if u.id == comment.author_user_id %}
+                                                        {{ u.full_name }}
+                                                        {% set author_found = true %}
+                                                    {% endif %}
+                                                {% endfor %}
+                                                {% if not author_found %}
+                                                    System / External Reviewer
+                                                {% endif %}
+                                            </strong>
+                                            <span class="status-badge" style="font-size: 0.7rem; font-weight: 700; background: {% if comment.decision_type == 'APPROVED' %}var(--status-approved-bg){% elif comment.decision_type == 'REJECTED' %}var(--status-needs-evidence-bg){% elif comment.decision_type == 'CHANGES_REQUESTED' %}var(--status-needs-review-bg){% else %}var(--border-color){% endif %}; color: {% if comment.decision_type == 'APPROVED' %}var(--status-approved){% elif comment.decision_type == 'REJECTED' %}var(--status-needs-evidence){% elif comment.decision_type == 'CHANGES_REQUESTED' %}var(--status-needs-review){% else %}var(--text-secondary){% endif %};">
+                                                {{ comment.decision_type }}
+                                            </span>
+                                        </div>
+                                        <p style="font-size: 0.9rem; line-height: 1.5; color: var(--text-secondary); margin-bottom: 0.25rem;">{{ comment.content }}</p>
+                                        <span style="font-size: 0.75rem; color: var(--text-muted);">{{ comment.created_at.strftime('%Y-%m-%d %H:%M') }} UTC</span>
+                                    </div>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                    </div>
+
+                    <!-- Audit Trail Card -->
+                    <div class="feature-card" style="margin-top: 0; padding: 2rem;">
+                        <h3 style="font-size: 1.25rem; font-weight: 600; color: var(--text-primary); margin-bottom: 1.25rem; display: flex; align-items: center; gap: 0.5rem;">
+                            <span>📜</span> Audit History
+                        </h3>
+                        <div style="display: flex; flex-direction: column; gap: 0.75rem; max-height: 250px; overflow-y: auto; padding-right: 0.25rem;">
+                            {% if not recent_audits %}
+                                <p style="color: var(--text-secondary); font-size: 0.9rem;">No audit events recorded.</p>
+                            {% else %}
+                                {% for audit in recent_audits %}
+                                    <div style="font-size: 0.85rem; border-bottom: 1px solid var(--border-color); padding-bottom: 0.5rem;">
+                                        <div style="display: flex; justify-content: space-between; color: var(--text-secondary); margin-bottom: 0.15rem;">
+                                            <strong>{{ audit.action }}</strong>
+                                            <span>{{ audit.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                                        </div>
+                                        <span style="color: var(--text-muted); font-size: 0.8rem;">Actor ID: {{ audit.user_id }}</span>
+                                    </div>
+                                {% endfor %}
+                            {% endif %}
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Right: Evidence Search and Drafting -->
@@ -163,6 +246,7 @@
                                             <span class="badge" style="font-size: 0.7rem; background: var(--status-drafted-bg); border-color: var(--border-color); color: var(--status-drafted); margin-right: auto; margin-left: 0.5rem;">Score: {{ "%.2f"|format(passage.score) }}</span>
                                             
                                             <form action="/requirements/{{ req.id }}/evidence/link" method="POST">
+                                                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                                 <input type="hidden" name="document_id" value="{{ passage.doc_id }}">
                                                 <input type="hidden" name="snippet" value="{{ passage.snippet }}">
                                                 <input type="hidden" name="page_number" value="{{ passage.page_number or '' }}">
@@ -193,11 +277,13 @@
                             <div style="text-align: center; padding: 2rem 1rem;">
                                 <p style="color: var(--text-secondary); font-size: 0.95rem; margin-bottom: 1.25rem; line-height: 1.5;">No draft answer has been generated or written yet. Click below to draft a source-backed response utilizing linked evidence passages.</p>
                                 <form action="/requirements/{{ req.id }}/draft" method="POST">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                     <button type="submit" class="btn btn-primary" style="padding: 0.75rem 2rem;">Draft Answer (AI / Fallback)</button>
                                 </form>
                             </div>
                         {% else %}
                             <form action="/requirements/{{ req.id }}/draft/edit" method="POST" style="display: flex; flex-direction: column; gap: 1rem;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                 <!-- Answer text field -->
                                 <div style="display: flex; flex-direction: column; gap: 0.35rem;">
                                     <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-secondary);">Answer Text</label>
@@ -220,35 +306,73 @@
                                         <span style="color: var(--text-secondary); display: block; margin-bottom: 0.15rem;">Assumptions</span>
                                         <p style="color: var(--text-secondary); line-height: 1.4; font-style: italic;">{{ draft.assumptions or "None recorded." }}</p>
                                     </div>
-                                </div>
-
-                                <!-- Actions row -->
-                                <div style="display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 0.5rem;">
-                                    <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.85rem;">Save Edits</button>
+                                    <!-- Actions row -->
+                                    <div style="display: flex; gap: 0.75rem; justify-content: flex-end; margin-top: 0.5rem;">
+                                        <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.85rem;">Save Edits</button>
+                                    </div>
                                 </div>
                             </form>
 
                             <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
-                                <div style="display: flex; gap: 0.5rem;">
-                                    <form action="/requirements/{{ req.id }}/draft/approve" method="POST">
+                                <div style="display: flex; gap: 0.5rem; align-items: center;">
+                                    <form action="/requirements/{{ req.id }}/draft/approve" method="POST" style="margin: 0;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                         <button type="submit" class="btn btn-primary" style="background: var(--status-approved); box-shadow: none; padding: 0.5rem 1.25rem; font-size: 0.85rem;" onmouseover="this.style.background='#126a4b'" onmouseout="this.style.background='var(--status-approved)'">Approve Answer</button>
                                     </form>
-                                    <form action="/requirements/{{ req.id }}/draft/reject" method="POST">
-                                        <button type="submit" class="btn btn-secondary" style="border-color: rgba(180, 35, 24, 0.2); color: var(--status-needs-evidence); padding: 0.5rem 1.25rem; font-size: 0.85rem;">Reject Answer</button>
+                                    
+                                    {% if req.status not in ('IN_REVIEW', 'APPROVED', 'REJECTED', 'CHANGES_REQUESTED') %}
+                                    <form action="/requirements/{{ req.id }}/review/start" method="POST" style="margin: 0;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                                        <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1.25rem; font-size: 0.85rem;">Start Review</button>
                                     </form>
+                                    {% endif %}
+
+                                    {% if req.status in ('CHANGES_REQUESTED', 'REJECTED') %}
+                                    <form action="/requirements/{{ req.id }}/review/reopen" method="POST" style="margin: 0;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                                        <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1.25rem; font-size: 0.85rem;">Reopen</button>
+                                    </form>
+                                    {% endif %}
                                 </div>
-                                <form action="/requirements/{{ req.id }}/draft/regenerate" method="POST">
+                                <form action="/requirements/{{ req.id }}/draft/regenerate" method="POST" style="margin: 0;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                                     <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.85rem;">Regenerate</button>
                                 </form>
                             </div>
 
                             <!-- Assign reviewer form -->
                             <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem;">
-                                <h4 style="font-size: 0.95rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.75rem;">Route Gap to Reviewer</h4>
+                                <h4 style="font-size: 0.95rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.75rem;">Assign Reviewer</h4>
                                 <form action="/requirements/{{ req.id }}/assign" method="POST" style="display: flex; gap: 0.5rem;">
-                                    <input type="text" name="reviewer_name" required placeholder="Enter reviewer name..." class="form-control" style="padding: 0.5rem 0.75rem; font-size: 0.85rem;">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                                    <select name="assigned_to_user_id" class="form-control" style="font-size: 0.85rem; padding: 0.5rem 0.75rem; cursor: pointer; max-width: 300px;">
+                                        <option value="unassign">Unassign / None</option>
+                                        {% for u in users %}
+                                            <option value="{{ u.id }}" {% if req.assigned_to_user_id == u.id %}selected{% endif %}>{{ u.full_name }} ({{ u.email }})</option>
+                                        {% endfor %}
+                                    </select>
                                     <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1.25rem; font-size: 0.85rem; flex-shrink: 0;">Assign</button>
                                 </form>
+                            </div>
+
+                            <!-- Decision Actions -->
+                            <div style="border-top: 1px solid var(--border-color); padding-top: 1.25rem; margin-top: 1.25rem; display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                                <div>
+                                    <h4 style="font-size: 0.95rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.5rem;">Request Changes</h4>
+                                    <form action="/requirements/{{ req.id }}/review/changes-requested" method="POST" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                                        <textarea name="reason" required placeholder="Describe changes needed..." class="form-control" style="font-size: 0.85rem; height: 80px; resize: vertical;"></textarea>
+                                        <button type="submit" class="btn btn-secondary" style="padding: 0.4rem; font-size: 0.85rem; border-color: rgba(182, 107, 0, 0.3); color: var(--status-needs-review);">Request Changes</button>
+                                    </form>
+                                </div>
+                                <div>
+                                    <h4 style="font-size: 0.95rem; font-weight: 600; color: var(--text-primary); margin-bottom: 0.5rem;">Reject with Reason</h4>
+                                    <form action="/requirements/{{ req.id }}/review/reject" method="POST" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                                        <textarea name="reason" required placeholder="Describe reason for rejection..." class="form-control" style="font-size: 0.85rem; height: 80px; resize: vertical;"></textarea>
+                                        <button type="submit" class="btn btn-secondary" style="padding: 0.4rem; font-size: 0.85rem; border-color: rgba(180, 35, 24, 0.3); color: var(--status-needs-evidence);">Reject</button>
+                                    </form>
+                                </div>
                             </div>
                         {% endif %}
                     </div>

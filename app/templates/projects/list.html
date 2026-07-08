@@ -37,6 +37,12 @@
                         <span>Landing Page</span>
                     </a>
                 </li>
+                <li>
+                    <a href="/logout" class="sidebar-link">
+                        <span style="font-size: 1.1rem;">🚪</span>
+                        <span>Sign Out</span>
+                    </a>
+                </li>
             </ul>
             
             <div style="margin-top: auto; padding-top: var(--space-md); border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: var(--space-xs);">
@@ -141,6 +147,7 @@
             </div>
             
             <form action="/projects" method="POST" style="display: flex; flex-direction: column; gap: 1.25rem;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                 <div style="display: flex; flex-direction: column; gap: 0.5rem;">
                     <label for="name" style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Project Name</label>
                     <input type="text" id="name" name="name" required placeholder="e.g. Acme Security System RFP" style="border-radius: var(--radius-sm);">

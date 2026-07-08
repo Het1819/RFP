@@ -1,0 +1,88 @@
+# Branch Protection and Release Guidance
+
+This document describes the branch protection policies, CI/CD quality gates, release process, and rollback procedures for the RFP Architect MVP.
+
+## 1. Recommended Branch Protection Policies
+
+To ensure stability in production and pilot environments, configure the following branch protection rules for the primary branches (`main`, `master`, and `hardening-pilot-readiness`):
+
+1. **No Direct Commits**: Require pull requests (PR) for all changes. Direct pushes to protected branches must be disabled.
+2. **Required Approvals**: Require at least one human review and approval on any PR before merge.
+3. **Required Status Checks**: The following GitHub Actions checks must pass before merging:
+   - `backend-quality` (formatting, linting, type checks, and pytest suite)
+   - `frontend-quality` (assets build and TypeScript compilation check)
+   - `ai-evals` (offline AI eval suite validation against thresholds)
+   - `docker-build` (successful compilation of production container image)
+   - `security-scan` (vulnerability, secret, and container scans)
+4. **Conversation Resolution**: Require all conversation threads on code changes to be resolved.
+
+---
+
+## 2. CI/CD Quality Gates & Scanning
+
+The repository includes a comprehensive CI pipeline in `.github/workflows/ci.yml` that executes the following checks:
+- **Dependency Vulnerability Scanning**:
+  - Python dependencies are validated using `pip-audit`.
+  - Node dependencies are checked with `npm audit`.
+- **Secret Scanning**:
+  - Scans repository changes using `gitleaks` to prevent API keys or secrets exposure.
+- **Container & Filesystem Scanning**:
+  - filesystem and container configurations are scanned via `Trivy`.
+- **Software Bill of Materials (SBOM)**:
+  - Automatically generated in SPDX/CycloneDX format and uploaded as a CI release artifact.
+
+---
+
+## 3. Creating a Release
+
+Releases are triggered automatically when a tag matching the pattern `pilot-hardening-step*` is pushed.
+
+### Release Procedure
+1. Create and push a tag from the verified branch:
+   ```bash
+   git tag -a pilot-hardening-step12 -m "Release Step 12: CI/CD Quality Gates"
+   git push origin pilot-hardening-step12
+   ```
+2. The `Release Workflow` (`.github/workflows/release.yml`) will verify all quality gates, compile the production Docker image, generate an SBOM, compile release notes, and upload the build artifacts to GitHub Releases.
+
+---
+
+## 4. Final Release Validation
+
+Before submitting a pull request to merge a hardening branch, developers must run the automated final validation script. This ensures all linting, formatting, type checking, unit/integration tests, and Docker compose configurations pass cleanly.
+
+### Running Validation:
+```powershell
+# Run validation on Windows PowerShell (skips docker build for speed if desired)
+powershell -ExecutionPolicy Bypass -File scripts/final_release_validation.ps1 -SkipDockerBuild
+
+# Run validation on Bash
+./scripts/final_release_validation.sh --skip-docker-build
+```
+
+---
+
+## 5. Rollback and Recovery Guidance
+
+If a production/pilot deployment experiences severe failure, roll back to a previously tagged stable commit.
+
+### Deployment Rollback
+Identify the last stable pilot release tag:
+- **`pilot-hardening-step11`**: Stables logging correlation, Prometheus metrics, and Pilot KPI dashboard.
+- **`pilot-hardening-step12`**: Stables CI/CD validation, supply chain scanning, and local check helpers.
+- **`pilot-hardening-step13`**: Stables staging deployment rehearsal, smoke tests, rollback drills, and pilot readiness checklist.
+- **`pilot-hardening-step14`**: Stables pilot onboarding materials, feedback capture routes, and exit criteria.
+- **`pilot-hardening-step15`**: Stables commercial package, pricing scorecard, objection guide, and conversion criteria.
+- **`pilot-hardening-step16`**: Stables outreach sales templates, CRM stages, and email sequences.
+- **`pilot-hardening-step17`**: Stables first-campaign account trackers, research worksheets, meeting evidence capture, and weekly reporting templates.
+
+To roll back, deploy the corresponding container image tag or check out the tag locally and rebuild:
+```bash
+git checkout pilot-hardening-step17
+docker build -t rfp-architect-mvp:pilot .
+# Redeploy containers
+```
+
+For comprehensive step-by-step procedures regarding database schema downgrades, asset preservation, and incident response, consult the [RUNBOOK.md](file:///D:/RFA/Project/rfp-architect-mvp/RUNBOOK.md).
+
+

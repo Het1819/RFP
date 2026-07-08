@@ -37,6 +37,12 @@
                         <span>Landing Page</span>
                     </a>
                 </li>
+                <li>
+                    <a href="/logout" class="sidebar-link">
+                        <span style="font-size: 1.1rem;">🚪</span>
+                        <span>Sign Out</span>
+                    </a>
+                </li>
             </ul>
             
             <div style="margin-top: auto; padding-top: var(--space-md); border-top: 1px solid var(--border-color); display: flex; flex-direction: column; gap: var(--space-xs);">
@@ -96,13 +102,36 @@
                     </div>
                 </div>
 
+                <!-- Overdue Project Warning Banner -->
+                {% if is_overdue %}
+                <div style="background: rgba(180, 35, 24, 0.1); border: 1px solid rgba(180, 35, 24, 0.3); color: var(--status-needs-evidence); padding: var(--space-md); border-radius: var(--radius-md); margin-bottom: var(--space-md); display: flex; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 0.95rem;">
+                    <span>⚠️</span>
+                    <span>OVERDUE: This proposal project's due date has passed. Priority review recommended.</span>
+                </div>
+                {% endif %}
+
+                <!-- Task Queue Filter Area -->
+                <div style="background: var(--surface-primary); border: 1px solid var(--border-color); padding: var(--space-md); border-radius: var(--radius-lg); margin-bottom: var(--space-md); display: flex; flex-direction: column; gap: var(--space-xs);">
+                    <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Review Tasks Queue</span>
+                    <div style="display: flex; flex-wrap: wrap; gap: 0.5rem;">
+                        <a href="/projects/{{ project.id }}/matrix" class="btn {% if current_filter == '' %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; text-decoration: none;">All ({{ total_count }})</a>
+                        <a href="/projects/{{ project.id }}/matrix?filter=assigned_to_me" class="btn {% if current_filter == 'assigned_to_me' %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; text-decoration: none;">Assigned to Me ({{ assigned_to_me_count }})</a>
+                        <a href="/projects/{{ project.id }}/matrix?filter=unassigned" class="btn {% if current_filter == 'unassigned' %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; text-decoration: none;">Unassigned ({{ unassigned_count }})</a>
+                        <a href="/projects/{{ project.id }}/matrix?filter=needs_evidence" class="btn {% if current_filter == 'needs_evidence' %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; text-decoration: none;">Needs Evidence ({{ needs_evidence_count }})</a>
+                        <a href="/projects/{{ project.id }}/matrix?filter=needs_review" class="btn {% if current_filter == 'needs_review' %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; text-decoration: none;">Needs Review ({{ needs_review_count }})</a>
+                        <a href="/projects/{{ project.id }}/matrix?filter=changes_requested" class="btn {% if current_filter == 'changes_requested' %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; text-decoration: none;">Changes Requested ({{ changes_requested_count }})</a>
+                        <a href="/projects/{{ project.id }}/matrix?filter=approved" class="btn {% if current_filter == 'approved' %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; text-decoration: none;">Approved ({{ approved_count }})</a>
+                        <a href="/projects/{{ project.id }}/matrix?filter=rejected" class="btn {% if current_filter == 'rejected' %}btn-primary{% else %}btn-secondary{% endif %}" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; text-decoration: none;">Rejected ({{ rejected_count }})</a>
+                    </div>
+                </div>
+
                 <!-- Stats summary bar -->
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-md);">
                     <div>
                         <h1 style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.01em;">Compliance Matrix</h1>
                         <p style="color: var(--text-secondary); font-size: 0.9rem;">Manage, verify, edit, and split requirement details extracted from the RFP.</p>
                     </div>
-                    <span class="badge" style="font-size: 0.8rem; font-weight: 700;">{{ requirements | length }} Extracted</span>
+                    <span class="badge" style="font-size: 0.8rem; font-weight: 700;">{{ requirements | length }} Shown</span>
                 </div>
 
                 {% if not requirements %}
@@ -118,6 +147,7 @@
                 {% else %}
                 <!-- Sticky Table Container -->
                 <form action="/projects/{{ project.id }}/matrix/merge" method="POST" id="matrix-form">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                     <div class="table-scroll-container">
                         <table class="matrix-table">
                             <thead>
@@ -155,6 +185,7 @@
             </div>
             
             <form id="split-form" method="POST">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                 <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1.25rem; line-height: 1.6;">
                     Enter the exact text block to isolate into a separate requirement entry. The segment will be automatically removed from the original requirement text.
                 </p>
