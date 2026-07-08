@@ -1,0 +1,5 @@
+account_name,contact_name_placeholder,contact_role,stage,source,last_touch_date,next_touch_date,pain_confirmed,rfp_volume_confirmed,security_blocker,budget_signal,decision_process,pilot_price_discussed,expected_pilot_value,probability,next_step,close_plan,notes
+Acme Corp,John Doe,Proposal Director,TARGET,Cold Outbound,2026-07-08,2026-07-10,False,False,False,False,TBD,False,5000,0.1,Send email 1,TBD,Sample pipeline target
+Beta Systems,Jane Smith,CTO,DISCOVERY_BOOKED,LinkedIn,2026-07-07,2026-07-09,True,True,False,True,TBD,True,5000,0.3,Run discovery call,Address SME drafting delays,Sample discovery booking
+Gov Solutions,Bob Johnson,Proposal Lead,PAID_PILOT_WON,Inbound,2026-07-06,2026-07-13,True,True,False,True,Sponsor sign-off,True,5000,1.0,Provision staging pilot tenant,Setup onboarding workshop,Sample won paid pilot
+Local Consulting,Alice Brown,VP Sales,CLOSED_LOST,Referral,2026-07-01,,False,False,True,False,,0,0.0,Archive deal,,Disqualified due to air-gapped security requirement

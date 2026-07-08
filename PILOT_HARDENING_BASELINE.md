@@ -687,6 +687,56 @@ The next step is **Step 3 (CSRF Protection)**:
 ### Remaining Gaps for Step 16
 * None. Step 15 is complete.
 
+---
+
+## 21. Step 16 - Outreach Execution and Sales Pipeline Operations
+
+### Files Changed
+- [PILOT_READINESS_CHECKLIST.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_READINESS_CHECKLIST.md) (appended Step 16 sales ops readiness checks).
+
+### Outreach Assets Added
+- [TARGET_ACCOUNT_LIST_TEMPLATE.csv](file:///D:/RFA/Project/rfp-architect-mvp/TARGET_ACCOUNT_LIST_TEMPLATE.csv) (target account database schema template with placeholder rows).
+- [CRM_PIPELINE_TEMPLATE.csv](file:///D:/RFA/Project/rfp-architect-mvp/CRM_PIPELINE_TEMPLATE.csv) (sales pipeline tracking sheet with core qualification status fields and WON/LOST stages).
+- [OUTREACH_TEMPLATES.md](file:///D:/RFA/Project/rfp-architect-mvp/OUTREACH_TEMPLATES.md) (cold and follow-up templates focusing on Excel matrix pain and SME drafting delay solutions).
+- [SALES_SEQUENCE.md](file:///D:/RFA/Project/rfp-architect-mvp/SALES_SEQUENCE.md) (10-day multi-channel sales sequence, stop conditions, and opt-out/unsubscribe compliance rules).
+- [DISCOVERY_SCORECARD.md](file:///D:/RFA/Project/rfp-architect-mvp/DISCOVERY_SCORECARD.md) (scorecard to qualify customer RFP volume, pains, urgency, and cloud security readiness).
+- [DEMO_QUALIFICATION_RULES.md](file:///D:/RFA/Project/rfp-architect-mvp/DEMO_QUALIFICATION_RULES.md) (explicit rules defining who gets a demo, who remains in discovery, and who is disqualified).
+- [PILOT_DEAL_REVIEW_CHECKLIST.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_DEAL_REVIEW_CHECKLIST.md) (pre-proposal alignment checklist checking target buyer authority, success metrics, and legal/security reviews).
+- [WEEKLY_SALES_CADENCE.md](file:///D:/RFA/Project/rfp-architect-mvp/WEEKLY_SALES_CADENCE.md) (calendar blocks, pipeline review meetings, and performance dashboard KPIs).
+- [AI_CLAIMS_AND_OUTREACH_GUARDRAILS.md](file:///D:/RFA/Project/rfp-architect-mvp/AI_CLAIMS_AND_OUTREACH_GUARDRAILS.md) (claim safety guidelines clarifying allowed/prohibited claims, human-in-the-loop dependencies, and safe vs unsafe phrasing examples).
+- [tests/integration/test_step16_sales_ops.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_step16_sales_ops.py) (integration test suite verifying CSV structures, file presence, lack of secrets, and compliance with outreach claim safety policies).
+
+### CRM Templates
+* Targets, contacts, stages, sources, confirmation checkboxes (pain, RFP volume), pilot pricing, expected contract value, win probabilities, and next steps are fully structured.
+
+### Sales Sequence
+* Includes 10-day multi-channel outreach cadence (LinkedIn connection, email touches, call blocks, opt-out reminders, and stop conditions).
+
+### Qualification Rules
+* Restricts product walkthroughs to prospects with >= 2 RFPs/month, confirmed sponsor access, and willingness to pay. Disqualifies leads needing air-gapped on-premises setups or secret/classified data.
+
+### Claim Safety Guardrails
+* Strictly prohibits SOC 2, HIPAA, FedRAMP, or ISO 27001 certification claims in outreach. Restricts statements to grounded retrieval details and mandates human-in-the-loop review terminology.
+
+### Tests Added
+* Integration tests verify all 9 files are present, do not contain real API keys, include expected headers in CSV templates, have expected stages in CRM pipeline records, and comply with safety policies.
+
+### Checks/Tests Results
+* `pytest -q`: PASS (171 tests passed).
+* `ruff check .`: PASS.
+* `ruff format --check .`: PASS.
+* `mypy app`: PASS.
+* `npm run assets:build`: PASS.
+* `npx tsc --noEmit`: PASS.
+* `scripts/run_ai_eval.py --offline`: PASS.
+* `docker compose -f docker-compose.prod.yml config`: PASS.
+* `docker build -t rfp-architect-mvp:pilot .`: PASS.
+* `powershell -ExecutionPolicy Bypass -File scripts/check_all.ps1`: PASS.
+
+### Remaining Gaps for Step 17
+* None. Step 16 is complete.
+
+
 
 
 

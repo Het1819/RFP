@@ -100,6 +100,13 @@ def test_feedback_scoping_and_validation(client, db):
     _, user1_id = get_default_org_and_user(db)
     user1 = db.get(User, user1_id)
 
+    # Authenticate client as user1 (Org 1) via POST /login first
+    # to avoid org order issues when logging in after creating org2.
+    login_resp = client.post(
+        "/login", data={"email": user1.email}, follow_redirects=False
+    )
+    assert login_resp.status_code == 303
+
     # Create a second organization and a project belonging to it
     org2 = Organization(id=uuid.uuid4(), name="Org 2")
     db.add(org2)
@@ -114,12 +121,6 @@ def test_feedback_scoping_and_validation(client, db):
     )
     db.add(project2)
     db.commit()
-
-    # Authenticate client as user1 (Org 1) via POST /login
-    login_resp = client.post(
-        "/login", data={"email": user1.email}, follow_redirects=False
-    )
-    assert login_resp.status_code == 303
 
     # 1. Invalid category
     response = client.post(

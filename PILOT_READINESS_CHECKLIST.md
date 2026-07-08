@@ -118,6 +118,7 @@ The following matrix must be signed off by the team before launching the pilot:
 | **Material** | Pilot Execution Docs | Onboarding, Quickstart, Data Handling exist | Verified | PASS |
 | **Triage** | Issue Escalation | Triage workflow and exit templates defined | Verified | PASS |
 | **Commercial** | Paid Conversion Docs | Qualification, pricing, ROI, scripts defined | Verified | PASS |
+| **Sales Ops** | Outreach System | Templates, sequences, scorecards, pipeline defined | Verified | PASS |
 
 ---
 
@@ -131,5 +132,17 @@ The following matrix must be signed off by the team before launching the pilot:
 - [ ] **ROI Calculator Guide:** Validate ROI estimations and conservative/aggressive payback scenarios.
 - [ ] **Objection Handling Guide:** Review honest technical rebuttals regarding hallucinations and security boundaries.
 - [ ] **Conversion Criteria:** Track required technical and business triggers before transitioning to paid rollout.
+
+---
+
+## 19. Step 16 - Outreach Execution and Sales Pipeline Operations Checklist
+
+- [ ] **Target Account List:** Confirm `TARGET_ACCOUNT_LIST_TEMPLATE.csv` columns and sample rows are validated.
+- [ ] **CRM Pipeline Template:** Confirm `CRM_PIPELINE_TEMPLATE.csv` stages (including WON/LOST/DISQUALIFIED) are mapped.
+- [ ] **Outreach Templates:** Confirm email and LinkedIn message copy does not make false win/ROI/compliance claims.
+- [ ] **Sales Sequence Cadence:** Follow the 10-business-day schedule and honor opt-out requests within the 1-day SLA.
+- [ ] **Discovery & Demo Scorecards:** Keep qualification scorecards ready for all new calls.
+- [ ] **Claim Safety Guardrails:** Review the prohibited claims section before executing outbound pitches.
+
 
 
