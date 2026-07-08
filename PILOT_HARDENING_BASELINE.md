@@ -592,4 +592,46 @@ The next step is **Step 3 (CSRF Protection)**:
 ### Remaining Issues
 - None. Step 13 is complete.
 
+---
+
+## 19. Step 14 - Controlled Pilot Onboarding and Execution
+
+### Files Changed
+- [PILOT_ONBOARDING_GUIDE.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_ONBOARDING_GUIDE.md) (created guide detailing target personas, supported inputs/limits, and schedule parameters).
+- [PILOT_PARTICIPANT_QUICKSTART.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_PARTICIPANT_QUICKSTART.md) (created quickstart guide for step-by-step pilot workspace execution).
+- [PILOT_DATA_HANDLING_NOTICE.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_DATA_HANDLING_NOTICE.md) (created data security notice containing transit and retention info, without making unsupported regulatory claims).
+- [PILOT_SUCCESS_METRICS.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_SUCCESS_METRICS.md) (created success metrics guide defining core AI, SLA, and go/no-go decisions).
+- [PILOT_TRIAGE_WORKFLOW.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_TRIAGE_WORKFLOW.md) (created issue escalation workflow mapping severities and owner roles).
+- [PILOT_EXIT_REPORT_TEMPLATE.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_EXIT_REPORT_TEMPLATE.md) (created template for customer pilot summaries and exit metrics).
+- [app/models/feedback.py](file:///D:/RFA/Project/rfp-architect-mvp/app/models/feedback.py) (created `PilotFeedback` database model containing categories, severities, message lengths, and creator IDs).
+- [app/models/__init__.py](file:///D:/RFA/Project/rfp-architect-mvp/app/models/__init__.py) (imported and exported `PilotFeedback`).
+- [alembic/versions/7a14e99f1390_create_pilot_feedback_table.py](file:///D:/RFA/Project/rfp-architect-mvp/alembic/versions/7a14e99f1390_create_pilot_feedback_table.py) (Alembic database schema migration).
+- [app/web/routes/feedback.py](file:///D:/RFA/Project/rfp-architect-mvp/app/web/routes/feedback.py) (created auth, CSRF, and org-scoped GET/POST `/feedback` endpoints).
+- [app/templates/feedback.html](file:///D:/RFA/Project/rfp-architect-mvp/app/templates/feedback.html) (HTML feedback input form styled with Outfit/Plus Jakarta Sans).
+- [app/main.py](file:///D:/RFA/Project/rfp-architect-mvp/app/main.py) (registered the feedback router).
+- [tests/integration/test_step14_pilot.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_step14_pilot.py) (created integration test suite covering artifact presence, regulatory claim validation, auth, CSRF, and tenant scoping on feedback route).
+- [PILOT_READINESS_CHECKLIST.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_READINESS_CHECKLIST.md) (appended Step 14 checklists to pre-flight Go/No-Go Decision Criteria).
+- [RUNBOOK.md](file:///D:/RFA/Project/rfp-architect-mvp/RUNBOOK.md) (referenced triage workflows and support escalation paths).
+
+### Controlled Pilot Execution Features
+- **In-App Feedback Capture:** An authenticated, CSRF-protected, and organization-scoped `/feedback` portal allows users to report bugs, AI quality issues, evidence mismatches, and export problems directly inside the workspace.
+- **Triage and SLA Targets:** Documented clear triage lanes (Blocker, High, Medium, Low) and response times ranging from 30 mins to 24 hours.
+- **Willingness-to-Pay Metrics:** Establishes pre-defined success measurements for Recall (>=90%), CSAT (>=4.0), and conversion recommendations.
+
+### Checks/Tests Results
+- `pytest -q`: PASS (154 tests passed).
+- `ruff check .`: PASS.
+- `ruff format --check .`: PASS.
+- `mypy app`: PASS.
+- `npm run assets:build`: PASS.
+- `npx tsc --noEmit`: PASS.
+- `scripts/run_ai_eval.py --offline`: PASS.
+- `docker compose -f docker-compose.prod.yml config`: PASS.
+- `docker build -t rfp-architect-mvp:pilot .`: PASS.
+- `powershell -ExecutionPolicy Bypass -File scripts/check_all.ps1`: PASS.
+
+### Remaining Issues
+- None. Step 14 is complete.
+
+
 

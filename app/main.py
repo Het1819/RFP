@@ -21,6 +21,7 @@ from app.core.observability import (
 from app.core.templates import templates
 from app.web.routes.auth import router as auth_router
 from app.web.routes.compliance import router as compliance_router
+from app.web.routes.feedback import router as feedback_router
 from app.web.routes.projects import router as projects_router
 
 # Setup JSON logging baseline immediately
@@ -96,6 +97,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 app.include_router(auth_router)
 app.include_router(projects_router)
 app.include_router(compliance_router)
+app.include_router(feedback_router)
 
 
 @app.exception_handler(HTTPException)

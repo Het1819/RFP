@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RFP Architect — Submit Pilot Feedback</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: var(--canvas);
+            padding: 2rem;
+        }
+        .feedback-container {
+            width: 100%;
+            max-width: 520px;
+            padding: 2.5rem;
+            box-shadow: var(--shadow-lg), var(--shadow-glow);
+            border: 1px solid var(--border-color);
+            background: var(--surface);
+            border-radius: var(--radius-md);
+            z-index: 10;
+        }
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .form-group label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .form-group input, .form-group select, .form-group textarea {
+            border: 1px solid var(--border-color);
+            background: var(--canvas);
+            color: var(--text-primary);
+            border-radius: var(--radius-sm);
+            padding: 0.75rem;
+            font-family: inherit;
+            font-size: 0.9rem;
+        }
+        .form-group textarea {
+            resize: vertical;
+            min-height: 120px;
+        }
+        .form-group select {
+            appearance: none;
+            background-image: url("data:image/svg+xml;utf8,<svg fill='gray' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='M7 10l5 5 5-5z'/><path d='M0 0h24v24H0z' fill='none'/></svg>");
+            background-repeat: no-repeat;
+            background-position: right 0.75rem center;
+            background-size: 1.25rem;
+            padding-right: 2rem;
+        }
+        .form-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 1rem;
+            margin-top: 2rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="glass-bg"></div>
+    
+    <div class="feedback-container">
+        <div style="margin-bottom: 2rem; text-align: center;">
+            <div style="font-size: 2.5rem; margin-bottom: 0.5rem;">📝</div>
+            <h1 style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary); margin-bottom: 0.25rem;">Submit Pilot Feedback</h1>
+            <p style="font-size: 0.85rem; color: var(--text-secondary);">Help us improve the RFP Architect MVP workspace</p>
+        </div>
+        
+        <form action="/feedback" method="POST">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="project_id" value="{{ project_id }}">
+            <input type="hidden" name="requirement_id" value="{{ requirement_id }}">
+            
+            <div class="form-group">
+                <label for="category">Category</label>
+                <select id="category" name="category" required>
+                    <option value="BUG">Bug Report</option>
+                    <option value="USABILITY">Usability Feedback</option>
+                    <option value="AI_QUALITY">AI Extraction/Drafting Quality</option>
+                    <option value="EVIDENCE">Evidence/Citation Grounding</option>
+                    <option value="EXPORT">DOCX/XLSX Export</option>
+                    <option value="PERFORMANCE">Performance/Latency</option>
+                    <option value="OTHER">Other Feedback</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="severity">Severity</label>
+                <select id="severity" name="severity" required>
+                    <option value="LOW">Low (Enhancement / suggestion)</option>
+                    <option value="MEDIUM" selected>Medium (Inconvenience / minor issue)</option>
+                    <option value="HIGH">High (Prevents task completion / workarounds exist)</option>
+                    <option value="BLOCKER">Blocker (Severe crash / cannot use feature)</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="message">Detailed Message</label>
+                <textarea id="message" name="message" placeholder="Please describe the issue or suggestion in detail..." required maxlength="2000"></textarea>
+            </div>
+            
+            <div class="form-actions">
+                <a href="/projects" class="btn btn-secondary" style="text-decoration: none; padding: 0.75rem 1.5rem; display: inline-flex; align-items: center; justify-content: center;">Cancel</a>
+                <button type="submit" class="btn btn-primary" style="padding: 0.75rem 1.5rem;">Submit Feedback</button>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

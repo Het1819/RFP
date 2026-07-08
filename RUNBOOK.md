@@ -133,3 +133,11 @@ Note that Redis persistence (via Append-Only File / AOF) is enabled to protect a
 Verify queue health:
 * Check Redis keys: `redis-cli ping` or `redis-cli KEYS "*"`
 * Confirm the `worker` service automatically reconnects to Redis and resumes tasks on reboot.
+
+---
+
+## 4. Pilot Support & Triage Escalation
+For managing participant bug reports, usability blockers, or AI quality issues reported via the `/feedback` workspace route:
+- Refer to [PILOT_TRIAGE_WORKFLOW.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_TRIAGE_WORKFLOW.md) for detailed severity definitions (Blocker, High, Medium, Low), SLA targets, and assignment owners.
+- If a security incident is identified (e.g. cross-tenant leakage or auth bypass), immediately execute Step 2 (Rollback Drill) to secure and isolate the stack.
+

@@ -114,3 +114,7 @@ The following matrix must be signed off by the team before launching the pilot:
 | **Operations** | Readiness Probe | `/readyz` returns 200 | Returns 200 | PASS |
 | **Infrastructure**| Smoke Test script | All steps pass | All steps pass | PASS |
 | **Recovery** | Backup/Restore Drill | Verified successful restore | Drill verified | PASS |
+| **Feedback** | Feedback Capture | In-app route operational | POST /feedback | PASS |
+| **Material** | Pilot Execution Docs | Onboarding, Quickstart, Data Handling exist | Verified | PASS |
+| **Triage** | Issue Escalation | Triage workflow and exit templates defined | Verified | PASS |
+
