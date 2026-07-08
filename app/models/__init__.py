@@ -1,5 +1,6 @@
 from app.models.audit import AuditEvent
 from app.models.base import Base
+from app.models.comment import RequirementComment
 from app.models.document import Document, DocumentPage
 from app.models.evidence import EvidenceLink
 from app.models.organization import Organization
@@ -19,6 +20,7 @@ __all__ = [
     "Organization",
     "ProposalProject",
     "Requirement",
+    "RequirementComment",
     "ReviewTask",
     "User",
 ]

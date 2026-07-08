@@ -353,4 +353,74 @@ The next step is **Step 3 (CSRF Protection)**:
 - `.\.venv\Scripts\python.exe scripts/run_ai_eval.py --offline`: PASS (thresholds_pass = true).
 
 ### Remaining Gaps for Step 9
-- Humans still need a streamlined UI workflow for routing review tasks to other users.
+- Humans still need a streamlined UI workflow for routing review tasks to other users. (COMPLETED)
+
+
+## 14. Step 9 - Human Review Workflow and Task Routing
+
+### Files Changed
+- [app/models/requirement.py](file:///D:/RFA/Project/rfp-architect-mvp/app/models/requirement.py) (added `assigned_to_user_id`, `assigned_by_user_id`, and `assigned_at` fields).
+- [app/models/comment.py](file:///D:/RFA/Project/rfp-architect-mvp/app/models/comment.py) (created new `RequirementComment` model).
+- [app/models/__init__.py](file:///D:/RFA/Project/rfp-architect-mvp/app/models/__init__.py) (registered and exported new comment model).
+- [alembic/versions/ef0310e3c06f_add_reviewer_assignment_and_comments.py](file:///D:/RFA/Project/rfp-architect-mvp/alembic/versions/ef0310e3c06f_add_reviewer_assignment_and_comments.py) (created Alembic migration).
+- [app/web/routes/compliance.py](file:///D:/RFA/Project/rfp-architect-mvp/app/web/routes/compliance.py) (extended `RequirementStatus`, added reviewer-assignment user validations, start/request changes/reject/reopen review endpoints, comments handling, filtering parameter support, and DOCX/XLSX unapproved export markers).
+- [app/templates/projects/matrix.html](file:///D:/RFA/Project/rfp-architect-mvp/app/templates/projects/matrix.html) (implemented Review Tasks Queue filter area and project overdue warnings).
+- [app/templates/projects/requirement_workspace.html](file:///D:/RFA/Project/rfp-architect-mvp/app/templates/projects/requirement_workspace.html) (integrated user select assign dropdown, start review/reopen/changes requested/reject actions, HTML-escaped comments history log, and warning banners for missing evidence / grounding failures).
+- [tests/integration/test_human_review.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_human_review.py) (created 9 new integration tests).
+
+### Status/Transition changes
+- Added statuses `IN_REVIEW` and `CHANGES_REQUESTED` to requirement statuses.
+- Formulated deterministic transitions:
+  - Assign reviewer -> moves to `NEEDS_REVIEW`.
+  - Start review -> moves to `IN_REVIEW`.
+  - Request changes -> moves to `CHANGES_REQUESTED` (requires reason/comment).
+  - Reject -> moves to `REJECTED` (requires reason/comment).
+  - Reopen -> moves to `NEEDS_REVIEW` (resets draft status).
+  - Approve -> moves to `APPROVED` (if grounding and evidence validations pass).
+
+### Assignment workflow
+- Authenticated users in the same organization can assign requirements to other users in the same organization.
+- Assigning to foreign or non-existent user IDs fails closed with 404.
+- Allows unassigning, clearing `assigned_to_user_id` and `owner_name`.
+
+### Review actions
+- Reviewers can start reviews, request changes, reject drafts, and reopen requirements with comments.
+- Comments are persisted in `RequirementComment` and HTML-escaped during rendering to prevent XSS.
+
+### Audit events
+- Logs specific audit events for review tasks:
+  - `REVIEW_ASSIGNED`
+  - `REVIEW_STARTED`
+  - `REVIEW_CHANGES_REQUESTED`
+  - `REVIEW_REJECTED`
+  - `REVIEW_REOPENED`
+  - `REVIEW_NOTE_ADDED`
+  - `REVIEW_APPROVED`
+
+### UI/Template changes
+- Overdue warning banner based on `due_date`.
+- Interactive filter bar counts based on review status and assignment.
+- Clear workspace warning labels when grounding validation fails.
+
+### Tests Added
+- `test_unauthenticated_assignment_fails`
+- `test_assignment_requires_csrf`
+- `test_reviewer_must_belong_to_same_org`
+- `test_valid_reviewer_assignment_succeeds`
+- `test_request_changes_requires_reason`
+- `test_reject_requires_reason`
+- `test_notes_are_escaped_in_workspace`
+- `test_review_task_filters`
+- `test_export_preserves_not_approved_marking`
+
+### Checks/Tests results
+- `pytest -q`: PASS (135 tests passed).
+- `ruff check .`: PASS (all clean).
+- `ruff format --check .`: PASS (all clean).
+- `mypy app`: PASS (no issues).
+- `npm run assets:build`: PASS (successful build).
+- `npx tsc --noEmit`: PASS.
+- `.\.venv\Scripts\python.exe scripts/run_ai_eval.py --offline`: PASS.
+
+### Remaining Issues
+- None. Step 9 is complete.

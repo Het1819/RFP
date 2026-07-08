@@ -30,6 +30,15 @@ class Requirement(Base):
     owner_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     proposal_section: Mapped[str | None] = mapped_column(String(100), nullable=True)
     risk_level: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    assigned_to_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    assigned_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    assigned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
