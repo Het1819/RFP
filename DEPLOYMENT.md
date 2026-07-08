@@ -184,3 +184,22 @@ Prometheus text-format metrics are exposed at:
 ### Operational KPI Dashboard
 A protected web-based dashboard is available at:
 - **`/projects/ops/dashboard`**: Displays project stats, document upload successes/failures, requirement extraction counts, average background processing times, and a list of failed background jobs requiring review. Scoped automatically to the authenticated organization.
+
+---
+
+## 12. Local Quality Gates & CI/CD Pipeline
+
+To ensure code stability before pushing commits:
+1. **Local Validation**: Run the helper validation script matching your operating system:
+   - **Windows (PowerShell)**:
+     ```powershell
+     powershell -ExecutionPolicy Bypass -File scripts/check_all.ps1
+     ```
+   - **Linux / macOS (Bash)**:
+     ```bash
+     ./scripts/check_all.sh
+     ```
+   These scripts check formatting (Ruff), types (Mypy/TypeScript), backend unit tests (Pytest), assets compilation, offline AI evals, and Docker Compose configurations.
+
+2. **Automated CI/CD Release Gates**: Every pull request or merge to main branches triggers `.github/workflows/ci.yml` which validates code cleanliness, runs static analysis, conducts offline evals, validates Docker compose config, performs vulnerability scans (pip-audit, npm audit, Trivy filesystem scans), and outputs a Software Bill of Materials (SBOM) artifact.
+

@@ -480,3 +480,79 @@ The next step is **Step 3 (CSRF Protection)**:
 
 ### Remaining Issues
 - None. Step 10 is complete.
+
+---
+
+## 16. Step 11 - Production Observability, Logging, and Dashboard
+
+### Files Changed
+- [app/core/observability.py](file:///D:/RFA/Project/rfp-architect-mvp/app/core/observability.py) (created JSON log formatter, metrics registry, and Prometheus text metrics exporter).
+- [app/main.py](file:///D:/RFA/Project/rfp-architect-mvp/app/main.py) (added correlation ID and metrics middleware, registered `/metrics`, `/healthz`, and `/readyz` endpoints).
+- [app/web/routes/projects.py](file:///D:/RFA/Project/rfp-architect-mvp/app/web/routes/projects.py) (implemented authenticated `/projects/ops/dashboard` view with Outfit styling and essential pilot KPIs).
+- [app/web/routes/auth.py](file:///D:/RFA/Project/rfp-architect-mvp/app/web/routes/auth.py) (implemented audit event logging for login/logout actions).
+- [app/web/routes/compliance.py](file:///D:/RFA/Project/rfp-architect-mvp/app/web/routes/compliance.py) (added correlation ID tracing to extraction and drafting services).
+- [app/core/llm.py](file:///D:/RFA/Project/rfp-architect-mvp/app/core/llm.py) (propagated correlation ID and registered call cost and latency metrics).
+- [app/worker.py](file:///D:/RFA/Project/rfp-architect-mvp/app/worker.py) (propagated trace correlation context inside background jobs).
+- [alembic/versions/35bf60412d49_add_request_id_to_audit_events.py](file:///D:/RFA/Project/rfp-architect-mvp/alembic/versions/35bf60412d49_add_request_id_to_audit_events.py) (database migration for audit events).
+- [alembic/versions/ce1d99d00aeb_add_request_id_to_processing_jobs.py](file:///D:/RFA/Project/rfp-architect-mvp/alembic/versions/ce1d99d00aeb_add_request_id_to_processing_jobs.py) (database migration for jobs correlation).
+- [scripts/backup_postgres.sh](file:///D:/RFA/Project/rfp-architect-mvp/scripts/backup_postgres.sh) (credential-safe PostgreSQL backup automation script).
+- [scripts/restore_postgres.sh](file:///D:/RFA/Project/rfp-architect-mvp/scripts/restore_postgres.sh) (credential-safe PostgreSQL restore automation script).
+- [DEPLOYMENT.md](file:///D:/RFA/Project/rfp-architect-mvp/DEPLOYMENT.md) (documented postgres backup/restore drills, metrics endpoints, dashboard usage, and suggested Prometheus alerts).
+- [tests/integration/test_observability.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_observability.py) (implemented 6 integration tests validating logging format, middleware, dashboard security, and metrics).
+
+### Telemetry Features
+- In-memory global state metrics tracking request counts, latencies, LLM invocation cost.
+- Log masking sanitizing keys: `prompt`, `completion`, `raw_text`, `hashed_password`, `email`, `secret_key`, etc.
+
+### Checks/Tests Results
+- `pytest -q`: PASS (147 tests passed).
+- `ruff check .`: PASS.
+- `ruff format --check .`: PASS.
+- `mypy app`: PASS.
+- `docker compose -f docker-compose.prod.yml config`: PASS.
+- `docker build -t rfp-architect-mvp:pilot .`: PASS.
+- `scripts/run_ai_eval.py --offline`: PASS.
+
+### Remaining Issues
+- None. Step 11 is complete.
+
+---
+
+## 17. Step 12 - CI/CD Release Gates and Supply Chain Security
+
+### Files Changed
+- [.github/workflows/ci.yml](file:///D:/RFA/Project/rfp-architect-mvp/.github/workflows/ci.yml) (created automated quality check workflow containing linting, formatting, type checking, pytest suite, frontend build, offline AI eval gates, dependency audits, secret scanning, filesystem security, and SBOM generation).
+- [.github/workflows/release.yml](file:///D:/RFA/Project/rfp-architect-mvp/.github/workflows/release.yml) (created manual/tag release workflow that runs checks, builds the production container, and uploads generated SBOM).
+- [scripts/check_all.ps1](file:///D:/RFA/Project/rfp-architect-mvp/scripts/check_all.ps1) (added local PowerShell validation helper running all static and runtime checks for Windows).
+- [scripts/check_all.sh](file:///D:/RFA/Project/rfp-architect-mvp/scripts/check_all.sh) (added local shell script validation helper running all static and runtime checks for Unix-like systems).
+- [RELEASE.md](file:///D:/RFA/Project/rfp-architect-mvp/RELEASE.md) (created new release and branch protection guidelines document).
+- [DEPLOYMENT.md](file:///D:/RFA/Project/rfp-architect-mvp/DEPLOYMENT.md) (updated deployment document to include local helper script guides and CI quality gates details).
+- [AI_EVALS.md](file:///D:/RFA/Project/rfp-architect-mvp/AI_EVALS.md) (updated document to detail offline evaluation execution inside CI).
+
+### Release Gates Implemented
+- Linting/Formatting: Ruff check and format check.
+- Type Checking: Python Mypy + Node TypeScript `tsc --noEmit`.
+- Automated Tests: Integration suite validation (Pytest).
+- AI Quality Gate: Offline evaluation suite validation against recall/precision/grounding thresholds.
+- Docker Validation: Multi-stage Docker build and compose syntax check.
+- Security Auditing:
+  - Python dependencies: `pip-audit` via compiled `requirements.txt` from `pyproject.toml`.
+  - Node dependencies: `npm audit --audit-level=high`.
+  - Secret scanning: `gitleaks` via GitHub Action.
+  - Filesystem/config vulnerability scanning: `Trivy`.
+- Software Supply Chain: Automated CycloneDX SBOM generation and preservation.
+
+### Checks/Tests Results
+- `pytest -q`: PASS (147 tests passed).
+- `ruff check .`: PASS.
+- `ruff format --check .`: PASS.
+- `mypy app`: PASS.
+- `npm run assets:build`: PASS.
+- `npx tsc --noEmit`: PASS.
+- `scripts/run_ai_eval.py --offline`: PASS.
+- `docker compose -f docker-compose.prod.yml config`: PASS.
+- `docker build -t rfp-architect-mvp:pilot .`: PASS.
+
+### Remaining Issues
+- None. Step 12 is complete.
+

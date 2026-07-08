@@ -240,3 +240,12 @@ Draft responses are evaluated against validated evidence links to flag unsupport
 
 ### Adding Evidence-Grounding Cases
 Add `evidence_integrity_cases` and `draft_grounding_cases` arrays to any golden case JSON file under `evals/fixtures/` as detailed in `evidence_integrity_rfp.json`.
+
+---
+
+## 15. CI/CD Evaluation Gate
+
+To prevent quality regressions, the offline AI evaluation suite is executed on every pull request and commit:
+1. **GitHub Actions**: The `ai-evals` job runs the offline suite and fails the build if the pipeline falls below the pilot thresholds.
+2. **Artifact Preservation**: Detailed evaluation reports are stored as a CI artifact (`ai-eval-report`) for inspection.
+

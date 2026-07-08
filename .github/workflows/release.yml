@@ -1,0 +1,95 @@
+name: Release Workflow
+
+on:
+  push:
+    tags:
+      - 'pilot-hardening-step*'
+  workflow_dispatch:
+
+jobs:
+  release-verification:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Install Python Dependencies
+        run: uv sync --all-groups
+
+      - name: Install NPM Dependencies
+        run: npm ci
+
+      - name: Run Backend Checks
+        run: |
+          uv run ruff check .
+          uv run ruff format --check .
+          uv run mypy app
+          uv run pytest -q
+        env:
+          APP_ENV: test
+          AUTH_MODE: session
+          SESSION_SECRET_KEY: "test-session-secret-key-32-chars-minimum"
+          APP_SECRET_KEY: "test-app-secret-key-32-chars-minimum"
+          DATABASE_URL: "sqlite:///:memory:"
+          REDIS_URL: "redis://localhost:6379/0"
+
+      - name: Run Frontend Checks
+        run: |
+          npm run assets:build
+          npx tsc --noEmit
+
+      - name: Run Offline AI Evals
+        run: uv run python scripts/run_ai_eval.py --offline
+
+      - name: Run Trivy Vulnerability Scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          format: 'table'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Build Docker Image
+        run: docker build -t rfp-architect-mvp:${{ github.ref_name || 'latest' }} .
+
+      - name: Generate SBOM
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          format: 'cyclonedx'
+          output: 'sbom.json'
+
+      - name: Generate Release Notes
+        id: release_notes
+        run: |
+          echo "## Release ${{ github.ref_name }}" > release_notes.md
+          echo "Commit: ${{ github.sha }}" >> release_notes.md
+          echo "### Changelog" >> release_notes.md
+          git log --oneline -5 >> release_notes.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/pilot-hardening-step')
+        with:
+          body_path: release_notes.md
+          files: |
+            sbom.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
