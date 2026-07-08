@@ -203,3 +203,39 @@ To ensure code stability before pushing commits:
 
 2. **Automated CI/CD Release Gates**: Every pull request or merge to main branches triggers `.github/workflows/ci.yml` which validates code cleanliness, runs static analysis, conducts offline evals, validates Docker compose config, performs vulnerability scans (pip-audit, npm audit, Trivy filesystem scans), and outputs a Software Bill of Materials (SBOM) artifact.
 
+---
+
+## 13. Staging Deployment Rehearsal and Pilot Readiness
+
+For pilot launch preparation, the repository includes full staging configuration templates, smoke tests, and rollback procedures.
+
+### Staging Setup
+Initialize configuration from the template:
+```bash
+cp .env.staging.example .env
+```
+Ensure all secrets are replaced with secure, non-default strings in `.env`.
+
+### Smoke Tests
+Execute verification checks on the staging/local deployment:
+- **Windows (PowerShell):**
+  ```powershell
+  powershell -ExecutionPolicy Bypass -File scripts/smoke_test.ps1 -BaseUrl "http://localhost:8000"
+  ```
+- **Linux / macOS (Bash):**
+  ```bash
+  ./scripts/smoke_test.sh "http://localhost:8000"
+  ```
+These scripts assert that the health (`/healthz`) and readiness (`/readyz`) endpoints return `200`, the login page (`/login`) loads, unauthenticated protected pages redirect to login, metrics expose properly, and the static assets manifest exists.
+
+### Rollback & Recovery
+Refer to [RUNBOOK.md](file:///D:/RFA/Project/rfp-architect-mvp/RUNBOOK.md) for full rollback procedures, Alembic migration policies, and backup/restore validation.
+
+### Database Seeding
+To populate staging with realistic, non-production test structures, execute:
+```bash
+python scripts/seed_pilot_demo.py
+```
+This script runs only when `APP_ENV` is set to `local`, `dev`, `test`, or `staging`. It will refuse to execute if `APP_ENV=production`.
+
+

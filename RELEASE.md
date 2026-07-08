@@ -58,10 +58,14 @@ Identify the last stable pilot release tag:
 - **`pilot-hardening-step10`**: Stables queue-backed asynchronous processing, Redis worker, and retry reliability.
 - **`pilot-hardening-step11`**: Stables logging correlation, Prometheus metrics, and Pilot KPI dashboard.
 - **`pilot-hardening-step12`**: Stables CI/CD validation, supply chain scanning, and local check helpers.
+- **`pilot-hardening-step13`**: Stables staging deployment rehearsal, smoke tests, rollback drills, and pilot readiness checklist.
 
 To roll back, deploy the corresponding container image tag or check out the tag locally and rebuild:
 ```bash
-git checkout pilot-hardening-step11
+git checkout pilot-hardening-step12
 docker build -t rfp-architect-mvp:pilot .
 # Redeploy containers
 ```
+
+For comprehensive step-by-step procedures regarding database schema downgrades, asset preservation, and incident response, consult the [RUNBOOK.md](file:///D:/RFA/Project/rfp-architect-mvp/RUNBOOK.md).
+

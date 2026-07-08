@@ -556,3 +556,40 @@ The next step is **Step 3 (CSRF Protection)**:
 ### Remaining Issues
 - None. Step 12 is complete.
 
+---
+
+## 18. Step 13 - Staging Deployment Rehearsal and Pilot Readiness
+
+### Files Changed
+- [.env.staging.example](file:///D:/RFA/Project/rfp-architect-mvp/.env.staging.example) (created staging environment configuration template).
+- [scripts/smoke_test.ps1](file:///D:/RFA/Project/rfp-architect-mvp/scripts/smoke_test.ps1) (created PowerShell smoke-test script for Windows validation).
+- [scripts/smoke_test.sh](file:///D:/RFA/Project/rfp-architect-mvp/scripts/smoke_test.sh) (created Bash smoke-test script for Unix-like validation).
+- [PILOT_READINESS_CHECKLIST.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_READINESS_CHECKLIST.md) (created comprehensive pre-launch checklist covering all security, operations, and AI quality checks).
+- [RUNBOOK.md](file:///D:/RFA/Project/rfp-architect-mvp/RUNBOOK.md) (created runbook for deployment rehearsals, rollback procedures, and database/Redis backup/restore drills).
+- [scripts/seed_pilot_demo.py](file:///D:/RFA/Project/rfp-architect-mvp/scripts/seed_pilot_demo.py) (created database seed script to populate environment with synthetic, non-production organizations, users, and RFP metadata).
+- [tests/integration/test_step13_acceptance.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_step13_acceptance.py) (added integration tests validating Step 13 files and checking they contain no secrets and enforce environment restrictions).
+- [DEPLOYMENT.md](file:///D:/RFA/Project/rfp-architect-mvp/DEPLOYMENT.md) (updated to document staging deployment rehearsals, smoke test executions, and database seeding).
+- [RELEASE.md](file:///D:/RFA/Project/rfp-architect-mvp/RELEASE.md) (updated to document the Step 13 rollback target and link to the operations runbook).
+
+### Staging Rehearsal & Validation Features
+- **Cross-Platform Smoke Testing:** Checks health/readiness endpoints (`/healthz` and `/readyz`), login load capabilities, unauthenticated routing redirects, metrics exposure, and frontend asset manifests.
+- **Annotated Tag Rollbacks:** Documented rollback procedures down to `pilot-hardening-step12` and rollback policy for database schema downgrades (using Alembic).
+- **Postgres & Redis Recovery Drill:** Verifies recovery via pg_dump/pg_restore into separate staging validation databases, matching NIST incident response recommendations.
+- **Production-Safe Seeding:** Idempotent database seeder that enforces a safety block refusing to run if `APP_ENV=production`.
+
+### Checks/Tests Results
+- `pytest -q`: PASS (150 tests passed).
+- `ruff check .`: PASS.
+- `ruff format --check .`: PASS.
+- `mypy app`: PASS.
+- `npm run assets:build`: PASS.
+- `npx tsc --noEmit`: PASS.
+- `scripts/run_ai_eval.py --offline`: PASS.
+- `docker compose -f docker-compose.prod.yml config`: PASS.
+- `docker build -t rfp-architect-mvp:pilot .`: PASS.
+- `powershell -ExecutionPolicy Bypass -File scripts/check_all.ps1`: PASS.
+
+### Remaining Issues
+- None. Step 13 is complete.
+
+
