@@ -267,4 +267,3 @@ def test_cross_tenant_isolation_boundary(client, db, monkeypatch):
     # Try to delete requirement A
     del_resp = client.delete(f"/requirements/{req_a.id}")
     assert del_resp.status_code == 404
-
