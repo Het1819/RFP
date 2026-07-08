@@ -117,4 +117,19 @@ The following matrix must be signed off by the team before launching the pilot:
 | **Feedback** | Feedback Capture | In-app route operational | POST /feedback | PASS |
 | **Material** | Pilot Execution Docs | Onboarding, Quickstart, Data Handling exist | Verified | PASS |
 | **Triage** | Issue Escalation | Triage workflow and exit templates defined | Verified | PASS |
+| **Commercial** | Paid Conversion Docs | Qualification, pricing, ROI, scripts defined | Verified | PASS |
+
+---
+
+## 18. Step 15 - Commercial Readiness Checklist
+
+- [ ] **ICP & Buyer Scorecard:** Verify `ICP_QUALIFICATION_SCORECARD.md` is shared with the sales/ops team.
+- [ ] **Paid Pilot Offer:** Confirm `PAID_PILOT_OFFER.md` scopes (2/4/6 weeks) and exclusions are aligned.
+- [ ] **Pricing and Packaging:** Ensure target price points ($2.5k, $5k, $10k) and SaaS margin metrics are approved.
+- [ ] **Discovery and Demo Scripts:** Practice scripts to avoid overpromising compliance features.
+- [ ] **Security Response Pack:** Maintain questionnaire answers with `[IMPLEMENTED]` / `[DOCUMENTED]` labels and no fake claims.
+- [ ] **ROI Calculator Guide:** Validate ROI estimations and conservative/aggressive payback scenarios.
+- [ ] **Objection Handling Guide:** Review honest technical rebuttals regarding hallucinations and security boundaries.
+- [ ] **Conversion Criteria:** Track required technical and business triggers before transitioning to paid rollout.
+
 

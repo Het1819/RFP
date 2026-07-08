@@ -633,5 +633,60 @@ The next step is **Step 3 (CSRF Protection)**:
 ### Remaining Issues
 - None. Step 14 is complete.
 
+---
+
+## 20. Step 15 - Paid Pilot Commercialization and Customer Conversion
+
+### Files Changed
+- [PILOT_READINESS_CHECKLIST.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_READINESS_CHECKLIST.md) (appended Step 15 commercial readiness checks).
+- [PILOT_SUCCESS_METRICS.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_SUCCESS_METRICS.md) (linked paid conversion criteria success thresholds).
+
+### Commercial Docs Added
+- [ICP_QUALIFICATION_SCORECARD.md](file:///D:/RFA/Project/rfp-architect-mvp/ICP_QUALIFICATION_SCORECARD.md) (qualification scoring grid for target segments and personas).
+- [PAID_PILOT_OFFER.md](file:///D:/RFA/Project/rfp-architect-mvp/PAID_PILOT_OFFER.md) (pilot packages of 2/4/6 weeks, inclusions, exclusions, and counsel review notices).
+- [PRICING_AND_PACKAGING.md](file:///D:/RFA/Project/rfp-architect-mvp/PRICING_AND_PACKAGING.md) (pricing strategy from $2,500 to $10,000, base platform + seat/page allowances, and red lines).
+- [DISCOVERY_CALL_SCRIPT.md](file:///D:/RFA/Project/rfp-architect-mvp/DISCOVERY_CALL_SCRIPT.md) (discovery call framework and qualification questions).
+- [DEMO_SCRIPT.md](file:///D:/RFA/Project/rfp-architect-mvp/DEMO_SCRIPT.md) (20-minute and 45-minute demo steps, plus boundaries on what not to claim).
+- [PILOT_PROPOSAL_TEMPLATE.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_PROPOSAL_TEMPLATE.md) (structured pilot contract proposal template with legal disclaimer).
+- [SECURITY_RESPONSE_PACK.md](file:///D:/RFA/Project/rfp-architect-mvp/SECURITY_RESPONSE_PACK.md) (concise response pack for IT risk questionnaires using `[IMPLEMENTED]` and `[DOCUMENTED]` labels).
+- [ROI_CALCULATOR_GUIDE.md](file:///D:/RFA/Project/rfp-architect-mvp/ROI_CALCULATOR_GUIDE.md) (cost avoidance and payback formulas with reference conservative/aggressive scenarios).
+- [OBJECTION_HANDLING_GUIDE.md](file:///D:/RFA/Project/rfp-architect-mvp/OBJECTION_HANDLING_GUIDE.md) (honest, non-overpromising objections handling regarding hallucinations, security, and compliance).
+- [PAID_CONVERSION_CRITERIA.md](file:///D:/RFA/Project/rfp-architect-mvp/PAID_CONVERSION_CRITERIA.md) (transition milestones, expansion/stop triggers, and rollout requirements).
+- [tests/integration/test_step15_commercial.py](file:///D:/RFA/Project/rfp-architect-mvp/tests/integration/test_step15_commercial.py) (integration test suite verifying file presence and validating that no uncertified compliance statements or secrets exist in the commercial materials).
+
+### Pricing & Packaging Assumptions
+* Flat-fee pilots: $2,500 (2 weeks), $5,000 (4 weeks), $10,000 (6 weeks).
+* Base platform annual subscriptions with usage tiers for seats or processed pages.
+* No free pilots without explicit LOI conversion guarantee or strategic case study value.
+
+### Security Response Pack
+* Explicitly states authentication, CSRF, multi-tenancy layer, daily backups, and CI/CD scan checks are `[IMPLEMENTED]`.
+* Clarifies that SOC 2, HIPAA, GDPR, FedRAMP, and ISO 27001 certifications are **not certified / unsupported** at this MVP stage.
+
+### ROI/Value Model
+* Models time saved, cost avoided, and payback period using RFP volume, SME drafting hours, loaded SME rates, and matrix copy-paste overhead.
+
+### Objection Handling
+* Refuses to overpromise compliance or AI accuracy. Emphasizes mandatory human-in-the-loop review, vector database evidence grounding, and scoped pilot boundary setups.
+
+### Tests Added
+* Integration tests verify all 10 files are present, do not contain real API keys, make no fake SOC 2/HIPAA/GDPR compliance statements, and include required disclaimers/exclusions.
+
+### Checks/Tests Results
+* `pytest -q`: PASS (166 tests passed).
+* `ruff check .`: PASS.
+* `ruff format --check .`: PASS.
+* `mypy app`: PASS.
+* `npm run assets:build`: PASS.
+* `npx tsc --noEmit`: PASS.
+* `scripts/run_ai_eval.py --offline`: PASS.
+* `docker compose -f docker-compose.prod.yml config`: PASS.
+* `docker build -t rfp-architect-mvp:pilot .`: PASS.
+* `powershell -ExecutionPolicy Bypass -File scripts/check_all.ps1`: PASS.
+
+### Remaining Gaps for Step 16
+* None. Step 15 is complete.
+
+
 
 

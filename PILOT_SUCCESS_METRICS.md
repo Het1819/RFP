@@ -54,3 +54,10 @@ Before transitioning from a free private pilot to a paid commercial pilot, the a
 | **Operations** | Export Stability | DOCX / XLSX Export | Any export corruption |
 | **Support** | Outstanding Blocker Bugs | 0 Blockers | Any open severity-BLOCKER ticket |
 | **Feedback** | User CSAT Score | >= 4.0 / 5.0 | Average rating is below 3.5 |
+
+---
+
+## 5. Paid Pilot Conversion
+
+For details on transition thresholds, stop/expansion triggers, and rollout checklists for converting pilot tenants to paid annual plans, refer to [PAID_CONVERSION_CRITERIA.md](file:///D:/RFA/Project/rfp-architect-mvp/PAID_CONVERSION_CRITERIA.md).
+
