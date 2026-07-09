@@ -28,7 +28,7 @@ function Test-Endpoint {
 
     try {
         # We use Invoke-WebRequest but skip auto redirect to check redirect codes
-        $Response = Invoke-WebRequest -Uri $Url -MaximumRedirection 0 -ErrorAction SilentlyContinue
+        $Response = Invoke-WebRequest -Uri $Url -MaximumRedirection 0 -UseBasicParsing -Headers @{ "Accept" = "text/html" } -ErrorAction SilentlyContinue
 
         $Status = $Response.StatusCode
         if ($null -eq $Status) {
@@ -73,8 +73,8 @@ if (-not $Readiness) { Throw "Smoke test failed at /readyz check" }
 $LoginLoad = Test-Endpoint -Path "/login" -ExpectedStatus 200
 if (-not $LoginLoad) { Throw "Smoke test failed at /login load check" }
 
-# 4. Verify Unauthenticated Root Redirects to Login
-$RootRedirect = Test-Endpoint -Path "/" -ExpectedStatus 303 -ExpectedRedirectPath "/login"
+# 4. Verify Unauthenticated Route Redirects to Login
+$RootRedirect = Test-Endpoint -Path "/projects" -ExpectedStatus 303 -ExpectedRedirectPath "/login"
 if (-not $RootRedirect) { Throw "Smoke test failed at unauthenticated root check" }
 
 # 5. Verify Unauthenticated KPI Dashboard Redirects to Login
@@ -85,14 +85,14 @@ if (-not $DashboardRedirect) { Throw "Smoke test failed at unauthenticated KPI d
 $MetricsLoad = Test-Endpoint -Path "/metrics" -ExpectedStatus 200
 if (-not $MetricsLoad) { Throw "Smoke test failed at /metrics check" }
 
-# 7. Check Static Assets Manifest
-$ManifestPath = "app/static/dist/manifest.json"
-Write-Host "Checking static assets manifest existence ... " -NoNewline -ForegroundColor Yellow
+# 7. Check Static Assets Bundle
+$ManifestPath = "app/static/dist/marketing.js"
+Write-Host "Checking static assets bundle existence ... " -NoNewline -ForegroundColor Yellow
 if (Test-Path $ManifestPath) {
-    Write-Host "PASS (Manifest exists at $ManifestPath)" -ForegroundColor Green
+    Write-Host "PASS (Bundle exists at $ManifestPath)" -ForegroundColor Green
 } else {
-    Write-Host "FAIL (Manifest missing)" -ForegroundColor Red
-    Throw "Smoke test failed: static assets manifest does not exist. Run npm run assets:build first."
+    Write-Host "FAIL (Bundle missing)" -ForegroundColor Red
+    Throw "Smoke test failed: static assets bundle does not exist. Run npm run assets:build first."
 }
 
 Write-Host "==========================================" -ForegroundColor Green
