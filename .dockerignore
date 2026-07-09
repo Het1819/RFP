@@ -1,14 +1,12 @@
 .git
 .venv
-__pycache__
-.pytest_cache
+__pycache__/
+.pytest_cache/
 .mypy_cache
 .ruff_cache
 node_modules
 local uploads/storage artifacts
 data
-.env
-.env.example
 *.pyc
 *.pyo
 *.pyd
@@ -20,3 +18,14 @@ data
 PILOT_HARDENING_BASELINE.md
 DEPLOYMENT.md
 tests
+
+# Env files exclusion
+.env
+.env.*
+!.env.example
+!.env.staging.example
+
+# Antigravity artifacts
+Antigravity*.txt
+Antigravity Continue.txt
+Resume Antigravity.txt

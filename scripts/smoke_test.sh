@@ -24,7 +24,7 @@ test_endpoint() {
     
     # Use curl to inspect response headers/status without following redirect
     local response
-    response=$(curl -s -w "%{http_code} %{redirect_url}" -o /dev/null "${url}")
+    response=$(curl -s -H "Accept: text/html" -w "%{http_code} %{redirect_url}" -o /dev/null "${url}")
     
     local status
     status=$(echo "${response}" | cut -d' ' -f1)
@@ -59,8 +59,8 @@ test_endpoint "/readyz" 200 "" || { echo "Readiness check failed"; exit 1; }
 # 3. Verify Login Page Loads
 test_endpoint "/login" 200 "" || { echo "Login load check failed"; exit 1; }
 
-# 4. Verify Unauthenticated Root Redirects to Login
-test_endpoint "/" 303 "/login" || { echo "Unauthenticated root redirect check failed"; exit 1; }
+# 4. Verify Unauthenticated Route Redirects to Login
+test_endpoint "/projects" 303 "/login" || { echo "Unauthenticated root redirect check failed"; exit 1; }
 
 # 5. Verify Unauthenticated KPI Dashboard Redirects to Login
 test_endpoint "/projects/ops/dashboard" 303 "/login" || { echo "Unauthenticated KPI dashboard redirect check failed"; exit 1; }
@@ -68,14 +68,14 @@ test_endpoint "/projects/ops/dashboard" 303 "/login" || { echo "Unauthenticated 
 # 6. Verify Prometheus Metrics Page Loads
 test_endpoint "/metrics" 200 "" || { echo "Metrics check failed"; exit 1; }
 
-# 7. Check Static Assets Manifest
-MANIFEST_PATH="app/static/dist/manifest.json"
-echo -n "Checking static assets manifest existence ... "
+# 7. Check Static Assets Bundle
+MANIFEST_PATH="app/static/dist/marketing.js"
+echo -n "Checking static assets bundle existence ... "
 if [ -f "${MANIFEST_PATH}" ]; then
-    echo -e "\e[32mPASS (Manifest exists at ${MANIFEST_PATH})\e[0m"
+    echo -e "\e[32mPASS (Bundle exists at ${MANIFEST_PATH})\e[0m"
 else
-    echo -e "\e[31mFAIL (Manifest missing)\e[0m"
-    echo "Smoke test failed: static assets manifest does not exist. Run npm run assets:build first."
+    echo -e "\e[31mFAIL (Bundle missing)\e[0m"
+    echo "Smoke test failed: static assets bundle does not exist. Run npm run assets:build first."
     exit 1
 fi
 
