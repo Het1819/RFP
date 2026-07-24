@@ -35,6 +35,9 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.sessions.clock import SystemClock
+from app.core.sessions.store import InMemorySessionStore
+from app.core.sessions.throttling import InMemoryThrottleStore
 from app.main import app
 from app.models.base import Base
 
@@ -138,12 +141,42 @@ def mock_session_local(monkeypatch, db):
 
 
 # ---------------------------------------------------------------------------
+# Session store isolation — fresh in-memory store/clock per test
+# ---------------------------------------------------------------------------
+# The app wires a RedisSessionStore into app.state.session_store at import
+# time for production. Tests substitute a fresh InMemorySessionStore (same
+# typed interface, see app.core.sessions.store) so the full test suite never
+# needs a real Redis instance, and so no state leaks between tests. Tests
+# that need to control time (idle/absolute expiry) replace
+# app.state.session_clock with a FakeClock themselves.
+
+
+@pytest.fixture
+def session_store():
+    """Fresh in-memory session store + throttle store, isolated per test."""
+    original_store = getattr(app.state, "session_store", None)
+    original_clock = getattr(app.state, "session_clock", None)
+    original_throttle_store = getattr(app.state, "throttle_store", None)
+    store = InMemorySessionStore()
+    app.state.session_store = store
+    app.state.session_clock = SystemClock()
+    app.state.throttle_store = InMemoryThrottleStore()
+    yield store
+    if original_store is not None:
+        app.state.session_store = original_store
+    if original_clock is not None:
+        app.state.session_clock = original_clock
+    if original_throttle_store is not None:
+        app.state.throttle_store = original_throttle_store
+
+
+# ---------------------------------------------------------------------------
 # Unauthenticated HTTP client — no session, no login
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def unauthenticated_client(db):
+def unauthenticated_client(db, session_store):
     """Bare TestClient with no session injection.
 
     Use for tests that explicitly verify unauthenticated behavior:
@@ -174,7 +207,7 @@ _TEST_AUTH_EMAIL = "ci-fixture@rfparchitect.com"
 
 
 @pytest.fixture
-def client(db):
+def client(db, session_store):
     """Authenticated TestClient.
 
     Authenticates by hitting the real /login route in AUTH_MODE=dev using a

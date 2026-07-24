@@ -1,6 +1,6 @@
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -10,13 +10,48 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.csrf import generate_csrf_token, validate_csrf_token
 from app.core.database import get_db
+from app.core.observability import MetricsRegistry
 from app.core.passwords import verify_password
+from app.core.sessions.throttling import (
+    LoginThrottle,
+    ThrottleStore,
+    ThrottleStoreUnavailableError,
+    normalize_email,
+)
 from app.core.templates import templates
 from app.models.organization import Organization
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["auth"])
+
+
+def _record_throttle_decision(decision: str) -> None:
+    MetricsRegistry.login_throttle_decisions[decision] = (
+        MetricsRegistry.login_throttle_decisions.get(decision, 0) + 1
+    )
+
+
+def _build_login_throttle(request: Request) -> LoginThrottle:
+    store = cast(ThrottleStore, request.app.state.throttle_store)
+    return LoginThrottle(
+        store,
+        settings.effective_login_throttle_secret,
+        account_ip_max=settings.LOGIN_THROTTLE_ACCOUNT_IP_MAX,
+        account_ip_window_seconds=settings.LOGIN_THROTTLE_ACCOUNT_IP_WINDOW_SECONDS,
+        ip_max=settings.LOGIN_THROTTLE_IP_MAX,
+        ip_window_seconds=settings.LOGIN_THROTTLE_IP_WINDOW_SECONDS,
+        account_max=settings.LOGIN_THROTTLE_ACCOUNT_MAX,
+        account_window_seconds=settings.LOGIN_THROTTLE_ACCOUNT_WINDOW_SECONDS,
+        max_cooldown_seconds=settings.LOGIN_THROTTLE_MAX_COOLDOWN_SECONDS,
+    )
+
+
+def _source_ip(request: Request) -> str:
+    # Direct ASGI peer address only. Forwarded-For/Real-IP/Forwarded headers
+    # are NOT trusted in this phase -- that belongs to a later
+    # reverse-proxy-aware hardening pass with an explicit trusted-proxy list.
+    return request.client.host if request.client is not None else "unknown"
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -37,7 +72,7 @@ def login_view(request: Request) -> Any:
     response_class=RedirectResponse,
     dependencies=[Depends(validate_csrf_token)],
 )
-def login_action(
+async def login_action(
     request: Request,
     email: str = Form(None),
     password: str = Form(None),
@@ -103,9 +138,38 @@ def login_action(
         if not email or not password:
             return generic_failure
 
-        normalized_email = email.strip().lower()
+        normalized_email = normalize_email(email)
+        source_ip = _source_ip(request)
+        throttle = _build_login_throttle(request)
+
+        try:
+            decision = await throttle.check(
+                normalized_email=normalized_email, source_ip=source_ip
+            )
+        except ThrottleStoreUnavailableError:
+            _record_throttle_decision("store_unavailable")
+            raise HTTPException(
+                status_code=503, detail="Service temporarily unavailable"
+            ) from None
+
+        if not decision.allowed:
+            _record_throttle_decision("blocked")
+            # Minimum safe timing-equalization: still run a password
+            # verification (against the dummy hash) so a throttled response
+            # doesn't time out faster than a normal failure would, without
+            # touching the database.
+            verify_password(password, None)
+            throttled_response = RedirectResponse(
+                url="/login?error=Invalid email or password", status_code=303
+            )
+            throttled_response.headers["Retry-After"] = str(
+                decision.retry_after_seconds
+            )
+            return throttled_response
+
+        normalized_email_lower = normalized_email
         user = db.scalars(
-            select(User).where(func.lower(User.email) == normalized_email)
+            select(User).where(func.lower(User.email) == normalized_email_lower)
         ).first()
 
         stored_hash = (
@@ -118,6 +182,13 @@ def login_action(
         from app.services.project_service import log_audit_event
 
         if user is None or not user.is_active or not password_ok:
+            try:
+                await throttle.record_failure(
+                    normalized_email=normalized_email, source_ip=source_ip
+                )
+            except ThrottleStoreUnavailableError:
+                pass
+            _record_throttle_decision("failure_recorded")
             if user is not None:
                 log_audit_event(
                     db,
@@ -129,6 +200,14 @@ def login_action(
                     details={"reason": "invalid_credentials"},
                 )
             return generic_failure
+
+        try:
+            await throttle.record_success(
+                normalized_email=normalized_email, source_ip=source_ip
+            )
+        except ThrottleStoreUnavailableError:
+            pass
+        _record_throttle_decision("allowed")
 
         # Clear any pre-authentication session data, then establish fresh
         # session/CSRF state before setting authenticated values.

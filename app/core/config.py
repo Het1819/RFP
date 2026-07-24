@@ -40,6 +40,36 @@ class Settings(BaseSettings):
     ENABLE_LLM_TELEMETRY: bool = True
     ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: bool = False
 
+    # --- Server-side session store (Phase A2) ---
+    # Falls back to REDIS_URL when unset; see `effective_session_redis_url`.
+    SESSION_REDIS_URL: str | None = None
+    SESSION_COOKIE_NAME: str = "rfp_session"
+    SESSION_IDLE_TIMEOUT_SECONDS: int = 900
+    SESSION_ABSOLUTE_TIMEOUT_SECONDS: int = 28800
+
+    # --- Login throttling (Phase A2) ---
+    # Dedicated secret for HMAC-deriving throttle account keys. Must be
+    # distinct from APP_SECRET_KEY/SESSION_SECRET_KEY in production.
+    LOGIN_THROTTLE_SECRET: str | None = None
+    LOGIN_THROTTLE_ACCOUNT_IP_MAX: int = 5
+    LOGIN_THROTTLE_ACCOUNT_IP_WINDOW_SECONDS: int = 900
+    LOGIN_THROTTLE_IP_MAX: int = 25
+    LOGIN_THROTTLE_IP_WINDOW_SECONDS: int = 900
+    LOGIN_THROTTLE_ACCOUNT_MAX: int = 20
+    LOGIN_THROTTLE_ACCOUNT_WINDOW_SECONDS: int = 3600
+    LOGIN_THROTTLE_MAX_COOLDOWN_SECONDS: int = 300
+
+    @property
+    def effective_session_redis_url(self) -> str:
+        return self.SESSION_REDIS_URL or self.REDIS_URL
+
+    @property
+    def effective_login_throttle_secret(self) -> str:
+        return (
+            self.LOGIN_THROTTLE_SECRET
+            or "dev-deterministic-fallback-throttle-secret-at-least-32-chars"
+        )
+
     @field_validator("APP_SECRET_KEY")
     @classmethod
     def warn_weak_secret(cls, v: str, info: object) -> str:
@@ -58,6 +88,21 @@ class Settings(BaseSettings):
         if not v:
             return "dev-deterministic-fallback-secret-key-at-least-32-chars-long"
         return v
+
+    @model_validator(mode="after")
+    def validate_session_timeouts(self) -> "Settings":
+        # Structural invariants enforced in every environment: a fail-open
+        # (zero/negative/inverted) timeout configuration is never valid.
+        if self.SESSION_IDLE_TIMEOUT_SECONDS <= 0:
+            raise ValueError("SESSION_IDLE_TIMEOUT_SECONDS must be positive")
+        if self.SESSION_ABSOLUTE_TIMEOUT_SECONDS <= 0:
+            raise ValueError("SESSION_ABSOLUTE_TIMEOUT_SECONDS must be positive")
+        if self.SESSION_IDLE_TIMEOUT_SECONDS >= self.SESSION_ABSOLUTE_TIMEOUT_SECONDS:
+            raise ValueError(
+                "SESSION_IDLE_TIMEOUT_SECONDS must be shorter than "
+                "SESSION_ABSOLUTE_TIMEOUT_SECONDS"
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_auth_config(self) -> "Settings":
@@ -91,6 +136,29 @@ class Settings(BaseSettings):
                     "REDIS_URL must be configured when QUEUE_ENABLED is "
                     "True in production-like environments"
                 )
+            if self.AUTH_MODE == "session":
+                redis_url = self.effective_session_redis_url
+                if (
+                    not redis_url
+                    or redis_url == _PLACEHOLDER
+                    or len(redis_url.strip()) == 0
+                ):
+                    raise ValueError(
+                        "SESSION_REDIS_URL (or REDIS_URL) must be configured "
+                        "in production-like environments when AUTH_MODE is "
+                        "'session'"
+                    )
+                if (
+                    not self.LOGIN_THROTTLE_SECRET
+                    or self.LOGIN_THROTTLE_SECRET == _PLACEHOLDER
+                    or len(self.LOGIN_THROTTLE_SECRET) < 32
+                    or self.LOGIN_THROTTLE_SECRET
+                    == "dev-deterministic-fallback-throttle-secret-at-least-32-chars"
+                ):
+                    raise ValueError(
+                        "LOGIN_THROTTLE_SECRET must be set, secure, and at "
+                        "least 32 characters in production-like environments"
+                    )
 
         if self.AUTH_MODE not in ("dev", "session", "oidc"):
             raise ValueError("AUTH_MODE must be one of 'dev', 'session', 'oidc'")
