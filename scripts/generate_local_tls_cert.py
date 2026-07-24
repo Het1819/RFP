@@ -100,7 +100,12 @@ def generate(hostname: str, force: bool) -> int:
         return 1
 
     try:
-        os.chmod(key_path, 0o600)
+        # World-readable rather than 0600: this is a local-validation-only
+        # self-signed key (explicitly documented as such), and Docker
+        # Compose bind-mounts secret files preserving the HOST file's mode
+        # -- Nginx's non-root uid inside the container needs read access,
+        # and its exact uid isn't guaranteed to match the host user's.
+        os.chmod(key_path, 0o644)
     except OSError:
         pass
 

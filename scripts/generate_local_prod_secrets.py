@@ -57,7 +57,14 @@ def _write_secret_file(path: str, value: str, *, force: bool) -> bool:
         f.write(value + "\n")
 
     try:
-        os.chmod(path, 0o600)  # no-op on platforms without POSIX permissions
+        # World-readable rather than 0600: these are local-validation-only
+        # credentials (explicitly documented as such, never real production
+        # secrets), and Docker Compose bind-mounts secret files preserving
+        # the HOST file's mode -- app/worker/postgres/redis each run as
+        # their own non-root, non-matching container uid, so an
+        # owner-only-readable file would be unreadable inside the
+        # container regardless of which host user generated it.
+        os.chmod(path, 0o644)  # no-op on platforms without POSIX permissions
     except OSError:
         pass
 
