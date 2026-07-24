@@ -57,7 +57,10 @@
             </div>
             <nav style="display: flex; align-items: center; gap: 1rem;">
                 <a href="/projects/{{ project.id }}/matrix" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Compliance Matrix</a>
-                <a href="/logout" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Sign Out</a>
+                <form action="/logout" method="POST" style="margin: 0; display: inline;">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                    <button type="submit" class="btn btn-secondary" style="padding: 0.5rem 1rem; font-size: 0.9rem;">Sign Out</button>
+                </form>
                 <span class="badge">MVP v0.1.0</span>
             </nav>
         </header>

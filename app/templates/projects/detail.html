@@ -38,10 +38,13 @@
                     </a>
                 </li>
                 <li>
-                    <a href="/logout" class="sidebar-link">
-                        <span style="font-size: 1.1rem;">🚪</span>
-                        <span>Sign Out</span>
-                    </a>
+                    <form action="/logout" method="POST" style="margin: 0;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                        <button type="submit" class="sidebar-link" style="width: 100%; background: none; border: none; text-align: left; cursor: pointer; font: inherit;">
+                            <span style="font-size: 1.1rem;">🚪</span>
+                            <span>Sign Out</span>
+                        </button>
+                    </form>
                 </li>
             </ul>
             

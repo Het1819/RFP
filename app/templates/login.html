@@ -42,8 +42,12 @@
             <form action="/login" method="POST" style="display: flex; flex-direction: column; gap: 1.25rem;">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                 <div style="display: flex; flex-direction: column; gap: 0.5rem;">
-                    <label for="email" style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Pilot User Email</label>
-                    <input type="email" id="email" name="email" required placeholder="e.g. pilot@rfparchitect.com" style="border-radius: var(--radius-sm); padding: 0.6rem 0.75rem; font-size: 0.9rem;">
+                    <label for="email" style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Email</label>
+                    <input type="email" id="email" name="email" required autocomplete="username" placeholder="e.g. pilot@rfparchitect.com" style="border-radius: var(--radius-sm); padding: 0.6rem 0.75rem; font-size: 0.9rem;">
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 0.5rem;">
+                    <label for="password" style="font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.05em;">Password</label>
+                    <input type="password" id="password" name="password" required autocomplete="current-password" style="border-radius: var(--radius-sm); padding: 0.6rem 0.75rem; font-size: 0.9rem;">
                 </div>
                 <button type="submit" class="btn btn-primary" style="padding: 0.75rem; font-size: 0.95rem; font-weight: 600; width: 100%;">Sign In</button>
             </form>

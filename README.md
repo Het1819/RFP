@@ -85,6 +85,57 @@ Alternatively, run tasks individually:
   make typecheck
   ```
 
+## Authentication
+
+The `AUTH_MODE` environment variable controls how users authenticate:
+
+- **`dev`** — local/CI convenience mode. Any submitted email is accepted; the
+  user (and a default organization) is created automatically if it does not
+  exist. `AUTH_MODE=dev` is refused at startup outside `development`,
+  `local`, or `test` environments.
+- **`session`** — password-based login. Users must submit both a registered
+  email and their password. Passwords are hashed with Argon2 (via `pwdlib`)
+  and verified against the stored hash; unknown emails, inactive accounts,
+  wrong passwords, and malformed stored hashes all fail with the same
+  generic `Invalid email or password` message, so failures do not reveal
+  account existence.
+- **`oidc`** — not implemented in this MVP; the login route returns `501`.
+
+### Provisioning a password for an existing user
+
+Users are created via the application (dev mode) or a future admin flow, but
+passwords must be set explicitly for `AUTH_MODE=session` login to work. Use
+the operator script, which prompts for the password interactively and never
+accepts it as a command-line argument:
+
+```bash
+uv run python scripts/set_user_password.py <user-email>
+```
+
+You will be prompted for the new password (typed input is hidden) and asked
+to confirm it. Passwords must be at least 15 characters. The script updates
+only an existing, unambiguous user by email — it never creates users.
+
+### Logging out
+
+Logout is a `POST /logout` request protected by the same CSRF token used
+elsewhere in the app (submitted via a form, not a link). A `GET /logout`
+request will not log the user out.
+
+### Current authentication limitations
+
+Phase A1 replaces email-only session login with password verification. It
+does **not** implement, and should not be assumed to provide:
+
+- login rate limiting / brute-force throttling;
+- absolute or idle session expiry;
+- server-side session revocation (e.g. "log out all devices");
+- multi-factor authentication (MFA) or enterprise OIDC/SSO;
+- password reset or self-service account recovery.
+
+These remain blockers for a production-ready deployment and are tracked as
+follow-up phases, not implemented here.
+
 ## RFP Upload Workflow (Slice 2)
 
 ### 1. Launch dev server

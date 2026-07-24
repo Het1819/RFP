@@ -4,12 +4,13 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.csrf import validate_csrf_token
+from app.core.csrf import generate_csrf_token, validate_csrf_token
 from app.core.database import get_db
+from app.core.passwords import verify_password
 from app.core.templates import templates
 from app.models.organization import Organization
 from app.models.user import User
@@ -39,6 +40,7 @@ def login_view(request: Request) -> Any:
 def login_action(
     request: Request,
     email: str = Form(None),
+    password: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
     if settings.AUTH_MODE == "dev":
@@ -93,16 +95,30 @@ def login_action(
         return RedirectResponse(url="/projects", status_code=303)
 
     elif settings.AUTH_MODE == "session":
-        if not email:
-            return RedirectResponse(
-                url="/login?error=Email is required", status_code=303
-            )
+        generic_failure = RedirectResponse(
+            url="/login?error=Invalid email or password",
+            status_code=303,
+        )
 
-        user = db.scalars(select(User).where(User.email == email)).first()
+        if not email or not password:
+            return generic_failure
+
+        normalized_email = email.strip().lower()
+        user = db.scalars(
+            select(User).where(func.lower(User.email) == normalized_email)
+        ).first()
+
+        stored_hash = (
+            user.hashed_password if user is not None and user.is_active else None
+        )
+        # Always perform password verification work, even for unknown/inactive
+        # users, so response timing does not reveal account existence.
+        password_ok = verify_password(password, stored_hash)
+
         from app.services.project_service import log_audit_event
 
-        if not user or not user.is_active:
-            if user:
+        if user is None or not user.is_active or not password_ok:
+            if user is not None:
                 log_audit_event(
                     db,
                     org_id=user.organization_id,
@@ -110,13 +126,14 @@ def login_action(
                     action="USER_LOGIN_FAILURE",
                     entity_type="User",
                     entity_id=user.id,
-                    details={"reason": "inactive"},
+                    details={"reason": "invalid_credentials"},
                 )
-            return RedirectResponse(
-                url="/login?error=Invalid email or account deactivated",
-                status_code=303,
-            )
+            return generic_failure
 
+        # Clear any pre-authentication session data, then establish fresh
+        # session/CSRF state before setting authenticated values.
+        request.session.clear()
+        generate_csrf_token(request)
         request.session["user_id"] = str(user.id)
         request.session["org_id"] = str(user.organization_id)
         log_audit_event(
@@ -140,8 +157,11 @@ def login_action(
     return RedirectResponse(url="/login", status_code=303)
 
 
-@router.get("/logout", response_class=RedirectResponse)
-@router.post("/logout", response_class=RedirectResponse)
+@router.post(
+    "/logout",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def logout_action(request: Request) -> Any:
     user_id_str = request.session.get("user_id")
     org_id_str = request.session.get("org_id")
