@@ -18,6 +18,10 @@ _VALID_PROD_BASE = {
     "ANTHROPIC_API_KEY": "sk-ant-real-key",
     "LLM_MODEL": "claude-sonnet-4-6",
     "STORAGE_BACKEND": "local",
+    "TRUSTED_PROXY_IPS": "172.28.0.10",
+    "ALLOWED_HOSTS": "rfp.example.com",
+    "PUBLIC_BASE_URL": "https://rfp.example.com",
+    "SESSION_COOKIE_NAME": "__Host-rfp_session",
 }
 
 

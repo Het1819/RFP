@@ -8,14 +8,15 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link rel="stylesheet" href="/static/dist/app.css">
+    <script type="module" src="/static/dist/app.js" defer></script>
 </head>
 <body>
     <div class="glass-bg"></div>
     
     <div class="app-shell" id="app-shell">
         <!-- Sidebar overlay for mobile drawer -->
-        <div class="sidebar-overlay" onclick="document.getElementById('app-shell').classList.remove('sidebar-open')"></div>
+        <div class="sidebar-overlay"></div>
 
         <!-- Left Sidebar Navigation -->
         <aside class="sidebar">
@@ -58,7 +59,7 @@
         <div class="main-content">
             <!-- Mobile Top Navigation Bar -->
             <div class="mobile-nav-bar">
-                <button class="menu-toggle-btn" onclick="document.getElementById('app-shell').classList.add('sidebar-open')">☰</button>
+                <button class="menu-toggle-btn">☰</button>
                 <div class="logo" style="display: flex; align-items: center; gap: 0.25rem;">
                     <span class="logo-icon" style="font-size: 1.2rem;">📐</span>
                     <span class="logo-text" style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);">RFP Architect</span>
@@ -69,7 +70,7 @@
             <!-- Desktop Workspace Top Bar -->
             <header class="top-bar">
                 <div class="top-bar-left">
-                    <a href="/projects" style="text-decoration: none; font-size: 1.25rem; color: var(--text-muted); transition: color var(--transition-fast);" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-muted)'">&larr;</a>
+                    <a href="/projects" class="back-link" style="text-decoration: none; font-size: 1.25rem; color: var(--text-muted); transition: color var(--transition-fast);">&larr;</a>
                     <div style="display: flex; flex-direction: column;">
                         <span class="workspace-context">Proposal Workspace • {{ project.client_name }}</span>
                         <span class="workspace-title">{{ project.name }}</span>

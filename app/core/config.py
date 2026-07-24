@@ -5,6 +5,7 @@ from urllib.parse import quote
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.client_ip import parse_trusted_proxy_ips
 from app.core.secrets import read_secret_file
 
 logger = logging.getLogger(__name__)
@@ -88,6 +89,24 @@ class Settings(BaseSettings):
     # whose connection string legitimately has no password segment visible
     # to this app (auth handled via IAM/VPC/managed-identity instead).
     REDIS_EXTERNALLY_MANAGED: bool = False
+
+    # --- Edge / reverse-proxy trust (Phase A4) ---
+    # Comma-separated list of EXACT trusted-proxy IPs (never a CIDR range
+    # or wildcard). In the A4 topology this is the Nginx service's
+    # deterministic backend-network IP. See app.core.client_ip.
+    TRUSTED_PROXY_IPS: str | None = None
+    # Comma-separated explicit hostnames this app answers to. No "*", no
+    # empty entries, no localhost/loopback/dev hostnames in production.
+    ALLOWED_HOSTS: str | None = None
+    # Absolute HTTPS URL identifying the public-facing origin. Must agree
+    # with ALLOWED_HOSTS and the Nginx server_name in production.
+    PUBLIC_BASE_URL: str | None = None
+    # Documented escape hatch for LOCAL VALIDATION ONLY: allows "localhost"/
+    # loopback values in ALLOWED_HOSTS and PUBLIC_BASE_URL so the full
+    # production-hardening code path can be exercised against the local
+    # Nginx edge stack without public DNS. Off by default; a real
+    # deployment must never set this.
+    ALLOW_LOOPBACK_HOST: bool = False
 
     # --- Secret files (Phase A3) ---
     # If set, each *_FILE value is read via read_secret_file() and
@@ -186,6 +205,16 @@ class Settings(BaseSettings):
     @property
     def effective_session_redis_url(self) -> str:
         return self.SESSION_REDIS_URL or self.effective_redis_url
+
+    @property
+    def effective_trusted_proxy_ips(self) -> frozenset[str]:
+        return parse_trusted_proxy_ips(self.TRUSTED_PROXY_IPS)
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        if not self.ALLOWED_HOSTS:
+            return []
+        return [h.strip() for h in self.ALLOWED_HOSTS.split(",") if h.strip()]
 
     @property
     def effective_login_throttle_secret(self) -> str:
@@ -418,10 +447,81 @@ class Settings(BaseSettings):
                     "mounted volume in production-like environments"
                 )
 
-        # 15: cookie name must be explicitly set (never empty/blank).
+        # 15: cookie name must be explicitly set (never empty/blank), and in
+        # production must use the `__Host-` prefix. Browsers only accept a
+        # `__Host-` cookie when it also has Secure, Path=/, and no Domain --
+        # ServerSessionMiddleware always sets those three in production
+        # (https_only=True, path="/", no domain param), so requiring the
+        # prefix here is a real behavioral guarantee, not just a name.
         if not self.SESSION_COOKIE_NAME or not self.SESSION_COOKIE_NAME.strip():
             raise ValueError(
                 "SESSION_COOKIE_NAME must not be empty in production-like environments"
+            )
+        if not self.SESSION_COOKIE_NAME.startswith("__Host-"):
+            raise ValueError(
+                "SESSION_COOKIE_NAME must use the '__Host-' prefix in "
+                "production-like environments (requires Secure, Path=/, "
+                "and no Domain -- all of which this app always sets)"
+            )
+
+        # Edge / reverse-proxy trust (Phase A4): fail closed if no exact
+        # trusted proxy is configured -- this app must never guess.
+        try:
+            trusted_ips = self.effective_trusted_proxy_ips
+        except ValueError as exc:
+            raise ValueError(f"TRUSTED_PROXY_IPS is invalid: {exc}") from exc
+        if not trusted_ips:
+            raise ValueError(
+                "TRUSTED_PROXY_IPS must be set to the exact Nginx backend "
+                "IP in production-like environments; forwarded-header "
+                "trust must never be left unconfigured"
+            )
+
+        # ALLOWED_HOSTS: explicit, no wildcard, no empty entries, no
+        # dev/loopback hostnames.
+        hosts = self.allowed_hosts_list
+        if not hosts:
+            raise ValueError(
+                "ALLOWED_HOSTS must be set explicitly in production-like environments"
+            )
+        _forbidden_hosts = {"*", "0.0.0.0", ""}
+        _loopback_hosts = {"localhost", "127.0.0.1", "::1"}
+        if not self.ALLOW_LOOPBACK_HOST:
+            _forbidden_hosts = _forbidden_hosts | _loopback_hosts
+        for host in hosts:
+            if host in _forbidden_hosts:
+                raise ValueError(
+                    f"ALLOWED_HOSTS contains a disallowed value in "
+                    f"production-like environments: {host!r}"
+                )
+
+        # PUBLIC_BASE_URL: absolute HTTPS URL, exact hostname, no
+        # userinfo/fragment/unexpected path, standard port unless explicit.
+        if not self.PUBLIC_BASE_URL:
+            raise ValueError(
+                "PUBLIC_BASE_URL must be set in production-like environments"
+            )
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(self.PUBLIC_BASE_URL)
+        if parsed.scheme != "https":
+            raise ValueError("PUBLIC_BASE_URL must use the https scheme")
+        if not parsed.hostname:
+            raise ValueError("PUBLIC_BASE_URL must include a hostname")
+        if parsed.username or parsed.password:
+            raise ValueError("PUBLIC_BASE_URL must not contain userinfo")
+        if parsed.fragment:
+            raise ValueError("PUBLIC_BASE_URL must not contain a fragment")
+        if parsed.path not in ("", "/"):
+            raise ValueError("PUBLIC_BASE_URL must not contain a path")
+        if parsed.port is not None and parsed.port != 443:
+            raise ValueError(
+                "PUBLIC_BASE_URL must use the standard HTTPS port (443) "
+                "unless explicitly documented otherwise"
+            )
+        if parsed.hostname not in hosts:
+            raise ValueError(
+                "PUBLIC_BASE_URL hostname must be included in ALLOWED_HOSTS"
             )
 
         return self

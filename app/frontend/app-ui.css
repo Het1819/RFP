@@ -1,0 +1,37 @@
+/* Shared, minimal styles for behaviors previously wired via inline
+   onmouseover/onmouseout handlers. Kept intentionally small -- the rest of
+   this app's styling remains inline for now (see CSP documentation in
+   DEPLOYMENT.md for why style-src keeps a temporary 'unsafe-inline'
+   exception while script-src does not). */
+
+.modal-close-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.75rem;
+    cursor: pointer;
+    line-height: 1;
+    transition: color var(--transition-fast);
+}
+
+.modal-close-btn:hover {
+    color: var(--text-primary);
+}
+
+.back-link:hover {
+    color: var(--text-primary);
+}
+
+.split-textarea:focus,
+.answer-textarea:focus {
+    border-color: var(--accent);
+}
+
+.file-drop-zone:hover {
+    border-color: var(--accent);
+    background: var(--light-blue);
+}
+
+.approve-btn:hover {
+    background: #126a4b;
+}

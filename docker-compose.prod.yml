@@ -1,33 +1,75 @@
-# Production-like Docker Compose stack (Phase A3).
+# Production-like Docker Compose stack (Phases A3 + A4).
 #
-# IMPORTANT: this stack is NOT externally deployable as-is. The app is
-# bound to 127.0.0.1 only (loopback) -- there is no TLS termination or
-# reverse proxy yet. That is Phase A4. This file is for local
-# production-configuration validation, not for exposing a public endpoint.
+# Topology:
+#   Internet/host --(80/443 only)--> nginx --(backend network)--> app:8000
+#                                                                    |
+#                                                          postgres, redis, worker
 #
-# All secrets are Docker Compose file-based secrets read from ./secrets/
-# (gitignored; never committed). Generate local validation secrets with:
+# nginx is the ONLY service with published host ports. app/worker/postgres/
+# redis join only the private "backend" network and are unreachable from
+# the host or the public internet. See DEPLOYMENT.md for the full edge
+# threat model.
 #
+# All application/database/Redis/Anthropic secrets are Docker Compose
+# file-based secrets read from ./secrets/ (gitignored; never committed).
+# nginx receives ONLY its TLS certificate/key -- never any application,
+# database, Redis, or Anthropic secret.
+#
+# Generate local validation secrets with:
 #   uv run python scripts/generate_local_prod_secrets.py
+#   uv run python scripts/generate_local_prod_secrets.py --import-anthropic-key
+#   uv run python scripts/generate_local_tls_cert.py --hostname localhost
 #
-# You must separately provide:
-#   - ./secrets/anthropic_api_key.txt   (see the generator's --help)
-#   - LLM_MODEL (env var, non-secret, e.g. claude-sonnet-4-6)
+# You must separately provide ./secrets/anthropic_api_key.txt and set
+# non-secret env vars (LLM_MODEL, NGINX_SERVER_NAME, ALLOWED_HOSTS,
+# PUBLIC_BASE_URL) to match your local validation hostname.
 #
 # Local Compose secret FILES are mounted files on disk -- this is NOT an
-# enterprise secret manager and is NOT proof of encrypted storage. Treat it
-# as what it is: keeping secrets out of the Compose YAML and out of
-# `docker inspect` environment output, nothing more.
+# enterprise secret manager and is NOT proof of encrypted storage.
 
 services:
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    networks:
+      edge:
+      backend:
+        ipv4_address: ${NGINX_BACKEND_IP:-172.28.0.10}
+    ports:
+      - "${EDGE_HTTP_BIND:-0.0.0.0}:${EDGE_HTTP_PORT:-80}:8080"
+      - "${EDGE_HTTPS_BIND:-0.0.0.0}:${EDGE_HTTPS_PORT:-443}:8443"
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-localhost}
+    secrets:
+      - tls_cert
+      - tls_key
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Explicit uid/gid/mode: the base image's nginx user is uid/gid 101, and
+    # Compose's tmpfs short syntax mounts root-owned, non-world-writable
+    # tmpfs by default -- without this, the non-root nginx process (and the
+    # base image's own envsubst-templating entrypoint step) cannot write
+    # into these paths despite the mount existing.
+    tmpfs:
+      - /tmp:size=32m,uid=101,gid=101,mode=1700
+      - /etc/nginx/conf.d:size=1m,uid=101,gid=101,mode=1700
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: on-failure:3
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
     networks:
       - backend
-    ports:
-      - "127.0.0.1:8000:8000"
+    expose:
+      - "8000"
     environment:
       APP_ENV: production
       AUTH_MODE: session
@@ -43,6 +85,11 @@ services:
       ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
       STORAGE_BACKEND: local
       LOCAL_STORAGE_PATH: /data/storage
+      SESSION_COOKIE_NAME: __Host-rfp_session
+      TRUSTED_PROXY_IPS: ${NGINX_BACKEND_IP:-172.28.0.10}
+      ALLOWED_HOSTS: ${NGINX_SERVER_NAME:-localhost}
+      ALLOW_LOOPBACK_HOST: ${ALLOW_LOOPBACK_HOST:-false}
+      PUBLIC_BASE_URL: https://${NGINX_SERVER_NAME:-localhost}
       APP_SECRET_KEY_FILE: /run/secrets/app_secret
       SESSION_SECRET_KEY_FILE: /run/secrets/session_secret
       LOGIN_THROTTLE_SECRET_FILE: /run/secrets/throttle_secret
@@ -84,15 +131,15 @@ services:
       - backend
     environment:
       APP_ENV: production
-      # AUTH_MODE/session/throttle config is not functionally used by the
-      # worker process, but it imports the same app.core.config.Settings
-      # class as the web app, and Settings' production validators are not
-      # (yet) process-role-aware -- they require session/throttle secrets
-      # unconditionally in production regardless of which process
-      # constructs Settings(). Narrowing this is a documented follow-up
-      # (see PR description); for now the worker mounts the same secret
-      # set as the app rather than silently working around shared
-      # validation.
+      # AUTH_MODE/session/throttle/trusted-proxy config is not functionally
+      # used by the worker process, but it imports the same
+      # app.core.config.Settings class as the web app, and Settings'
+      # production validators are not (yet) process-role-aware -- they
+      # require these fields unconditionally in production regardless of
+      # which process constructs Settings(). Narrowing this is a
+      # documented follow-up (see PR description); for now the worker
+      # mounts the same secret set and config as the app rather than
+      # silently working around shared validation.
       AUTH_MODE: session
       DB_HOST: postgres
       DB_PORT: "5432"
@@ -106,6 +153,11 @@ services:
       ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
       STORAGE_BACKEND: local
       LOCAL_STORAGE_PATH: /data/storage
+      SESSION_COOKIE_NAME: __Host-rfp_session
+      TRUSTED_PROXY_IPS: ${NGINX_BACKEND_IP:-172.28.0.10}
+      ALLOWED_HOSTS: ${NGINX_SERVER_NAME:-localhost}
+      ALLOW_LOOPBACK_HOST: ${ALLOW_LOOPBACK_HOST:-false}
+      PUBLIC_BASE_URL: https://${NGINX_SERVER_NAME:-localhost}
       APP_SECRET_KEY_FILE: /run/secrets/app_secret
       SESSION_SECRET_KEY_FILE: /run/secrets/session_secret
       LOGIN_THROTTLE_SECRET_FILE: /run/secrets/throttle_secret
@@ -131,7 +183,7 @@ services:
     # tell you the process is alive, not that it is actually connected to
     # Redis and processing jobs. Verify with `docker compose logs worker`
     # and by checking that queued jobs transition out of QUEUED. A real
-    # worker health signal is a recommended A4+ follow-up.
+    # worker health signal is a recommended follow-up.
     restart: on-failure:3
 
   postgres:
@@ -182,12 +234,20 @@ services:
     # backend network, never from the host or the public internet.
 
 networks:
-  backend:
-    # Deliberately NOT `internal: true`: app/worker need outbound HTTPS to
-    # the Anthropic API. Postgres/Redis stay unreachable from outside this
-    # Compose project because they publish no host ports at all, not
-    # because the network itself is cut off from the internet.
+  # Faces the host's published ports (nginx only). Not joined by app,
+  # worker, postgres, or redis.
+  edge:
     driver: bridge
+  # Private network for nginx<->app<->postgres/redis/worker. Explicit
+  # subnet so nginx can be assigned a deterministic IP that the app trusts
+  # as its ONLY forwarded-header source (see app.core.client_ip). The
+  # subnet is configurable (BACKEND_SUBNET) to avoid colliding with another
+  # Compose project's network on the same Docker host.
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${BACKEND_SUBNET:-172.28.0.0/24}
 
 volumes:
   postgres_data:
@@ -209,3 +269,7 @@ secrets:
     file: ./secrets/redis.conf
   anthropic_api_key:
     file: ./secrets/anthropic_api_key.txt
+  tls_cert:
+    file: ./secrets/tls_cert.pem
+  tls_key:
+    file: ./secrets/tls_key.pem

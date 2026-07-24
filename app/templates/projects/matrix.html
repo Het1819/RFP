@@ -8,14 +8,15 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link rel="stylesheet" href="/static/dist/app.css">
+    <script type="module" src="/static/dist/app.js" defer></script>
 </head>
 <body>
     <div class="glass-bg"></div>
-    
+
     <div class="app-shell" id="app-shell">
         <!-- Sidebar overlay for mobile drawer -->
-        <div class="sidebar-overlay" onclick="document.getElementById('app-shell').classList.remove('sidebar-open')"></div>
+        <div class="sidebar-overlay"></div>
 
         <!-- Left Sidebar Navigation -->
         <aside class="sidebar">
@@ -58,7 +59,7 @@
         <div class="main-content">
             <!-- Mobile Top Navigation Bar -->
             <div class="mobile-nav-bar">
-                <button class="menu-toggle-btn" onclick="document.getElementById('app-shell').classList.add('sidebar-open')">☰</button>
+                <button class="menu-toggle-btn">☰</button>
                 <div class="logo" style="display: flex; align-items: center; gap: 0.25rem;">
                     <span class="logo-icon" style="font-size: 1.2rem;">📐</span>
                     <span class="logo-text" style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);">RFP</span>
@@ -69,7 +70,7 @@
             <!-- Desktop Workspace Top Bar -->
             <header class="top-bar">
                 <div class="top-bar-left">
-                    <a href="/projects/{{ project.id }}" style="text-decoration: none; font-size: 1.25rem; color: var(--text-muted); transition: color var(--transition-fast);" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-muted)'">&larr;</a>
+                    <a href="/projects/{{ project.id }}" class="back-link" style="text-decoration: none; font-size: 1.25rem; color: var(--text-muted); transition: color var(--transition-fast);">&larr;</a>
                     <div style="display: flex; flex-direction: column;">
                         <span class="workspace-context">Proposal Matrix • {{ project.client_name }}</span>
                         <span class="workspace-title">{{ project.name }}</span>
@@ -155,7 +156,7 @@
                         <table class="matrix-table">
                             <thead>
                                 <tr>
-                                    <th style="width: 40px; text-align: center;"><input type="checkbox" onclick="toggleAll(this)" style="cursor: pointer; width: 16px; height: 16px;"></th>
+                                    <th style="width: 40px; text-align: center;"><input type="checkbox" id="toggle-all-checkbox" style="cursor: pointer; width: 16px; height: 16px;"></th>
                                     <th style="width: 100px;">Sec / Page</th>
                                     <th>Requirement Text</th>
                                     <th style="width: 120px;">Type</th>
@@ -180,39 +181,27 @@
     </div>
 
     <!-- Split Modal Dialog -->
-    <div id="split-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(10, 22, 51, 0.5); backdrop-filter: blur(10px); z-index: 1200; justify-content: center; align-items: center;" onclick="document.getElementById('split-modal').style.display='none'">
-        <div class="feature-card" style="width: 100%; max-width: 500px; padding: 2.5rem; box-shadow: var(--shadow-lg), var(--shadow-glow); border-color: var(--border-hover);" onclick="event.stopPropagation()">
+    <div id="split-modal" data-modal-backdrop="split-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(10, 22, 51, 0.5); backdrop-filter: blur(10px); z-index: 1200; justify-content: center; align-items: center;">
+        <div class="feature-card" data-modal-panel style="width: 100%; max-width: 500px; padding: 2.5rem; box-shadow: var(--shadow-lg), var(--shadow-glow); border-color: var(--border-hover);">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
                 <h3 style="font-size: 1.35rem; font-weight: 800; color: var(--text-primary); letter-spacing: -0.02em;">Split Requirement</h3>
-                <button onclick="document.getElementById('split-modal').style.display='none'" style="background: none; border: none; color: var(--text-muted); font-size: 1.75rem; cursor: pointer; line-height: 1; transition: color var(--transition-fast);" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-muted)'">&times;</button>
+                <button data-modal-close="split-modal" class="modal-close-btn">&times;</button>
             </div>
-            
+
             <form id="split-form" method="POST">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
                 <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 1.25rem; line-height: 1.6;">
                     Enter the exact text block to isolate into a separate requirement entry. The segment will be automatically removed from the original requirement text.
                 </p>
-                <textarea name="split_text" required placeholder="e.g. Requirement text to split off..." style="width: 100%; height: 120px; background: var(--surface-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0.75rem; color: var(--text-primary); font-family: inherit; margin-bottom: 1.5rem; resize: vertical; outline: none; transition: border-color var(--transition-fast);" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border-color)'"></textarea>
-                
+                <textarea name="split_text" required placeholder="e.g. Requirement text to split off..." class="split-textarea" style="width: 100%; height: 120px; background: var(--surface-secondary); border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 0.75rem; color: var(--text-primary); font-family: inherit; margin-bottom: 1.5rem; resize: vertical; outline: none; transition: border-color var(--transition-fast);"></textarea>
+
                 <div style="display: flex; gap: 1rem; justify-content: flex-end; border-top: 1px solid var(--border-color); padding-top: var(--space-md);">
-                    <button type="button" onclick="document.getElementById('split-modal').style.display='none'" class="btn btn-secondary" style="padding: 0.6rem 1.5rem; border-radius: var(--radius-sm);">Cancel</button>
+                    <button type="button" data-modal-close="split-modal" class="btn btn-secondary" style="padding: 0.6rem 1.5rem; border-radius: var(--radius-sm);">Cancel</button>
                     <button type="submit" class="btn btn-primary" style="padding: 0.6rem 1.5rem; border-radius: var(--radius-sm);">Split Requirement</button>
                 </div>
             </form>
         </div>
     </div>
 
-    <script>
-        function toggleAll(master) {
-            const checkboxes = document.querySelectorAll('input[name="ids"]');
-            checkboxes.forEach(cb => cb.checked = master.checked);
-        }
-
-        function openSplitModal(reqId) {
-            const form = document.getElementById('split-form');
-            form.action = `/requirements/${reqId}/split`;
-            document.getElementById('split-modal').style.display = 'flex';
-        }
-    </script>
 </body>
 </html>

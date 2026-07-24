@@ -8,7 +8,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link rel="stylesheet" href="/static/dist/app.css">
+    <script type="module" src="/static/dist/app.js" defer></script>
     <style>
         .workspace-grid {
             display: grid;
@@ -290,7 +291,7 @@
                                 <!-- Answer text field -->
                                 <div style="display: flex; flex-direction: column; gap: 0.35rem;">
                                     <label style="font-size: 0.85rem; font-weight: 500; color: var(--text-secondary);">Answer Text</label>
-                                    <textarea name="content" required style="width: 100%; height: 180px; background: var(--surface-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; color: var(--text-primary); font-family: inherit; font-size: 0.95rem; line-height: 1.5; resize: vertical; outline: none; transition: border-color 0.2s;" onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border-color)'">{{ draft.content }}</textarea>
+                                    <textarea name="content" required class="answer-textarea" style="width: 100%; height: 180px; background: var(--surface-secondary); border: 1px solid var(--border-color); border-radius: 8px; padding: 0.75rem; color: var(--text-primary); font-family: inherit; font-size: 0.95rem; line-height: 1.5; resize: vertical; outline: none; transition: border-color 0.2s;">{{ draft.content }}</textarea>
                                 </div>
 
                                 <!-- Metadata info: confidence and assumptions -->
@@ -320,7 +321,7 @@
                                 <div style="display: flex; gap: 0.5rem; align-items: center;">
                                     <form action="/requirements/{{ req.id }}/draft/approve" method="POST" style="margin: 0;">
                                         <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
-                                        <button type="submit" class="btn btn-primary" style="background: var(--status-approved); box-shadow: none; padding: 0.5rem 1.25rem; font-size: 0.85rem;" onmouseover="this.style.background='#126a4b'" onmouseout="this.style.background='var(--status-approved)'">Approve Answer</button>
+                                        <button type="submit" class="btn btn-primary" class="approve-btn" style="background: var(--status-approved); box-shadow: none; padding: 0.5rem 1.25rem; font-size: 0.85rem;">Approve Answer</button>
                                     </form>
                                     
                                     {% if req.status not in ('IN_REVIEW', 'APPROVED', 'REJECTED', 'CHANGES_REQUESTED') %}

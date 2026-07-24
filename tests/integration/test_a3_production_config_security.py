@@ -66,10 +66,14 @@ def test_fix_4_prod_compose_includes_login_throttle_secret():
     assert "LOGIN_THROTTLE_SECRET_FILE" in compose
 
 
-def test_fix_5_app_bound_to_loopback_only():
+def test_fix_5_app_has_no_published_host_port():
+    # Superseded by Phase A4: the app no longer publishes a loopback port
+    # directly -- Nginx is now the sole edge (see
+    # test_a4_edge_security.py for the Nginx loopback-binding checks).
     compose = _read("docker-compose.prod.yml")
-    assert "127.0.0.1:8000:8000" in compose
+    assert "127.0.0.1:8000:8000" not in compose
     assert '"8000:8000"' not in compose
+    assert 'expose:\n      - "8000"' in compose
 
 
 def test_fix_6_persistent_document_storage_volume_present():
@@ -162,10 +166,12 @@ def test_compose_contains_no_fixed_credential(rendered_compose_config):
 
 
 @pytestmark_docker
-def test_compose_app_is_loopback_bound_only(rendered_compose_config):
-    app_ports = rendered_compose_config["services"]["app"]["ports"]
-    assert len(app_ports) == 1
-    assert app_ports[0]["host_ip"] == "127.0.0.1"
+def test_compose_app_has_no_published_port(rendered_compose_config):
+    # Superseded by Phase A4: Nginx is now the sole edge; see
+    # test_a4_edge_security.py for Nginx's loopback-binding checks.
+    app = rendered_compose_config["services"]["app"]
+    assert "ports" not in app or not app["ports"]
+    assert app.get("expose") == ["8000"]
 
 
 @pytestmark_docker

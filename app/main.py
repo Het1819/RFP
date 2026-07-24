@@ -11,6 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.host_validation import HostValidationMiddleware
 from app.core.observability import (
     SAFE_ID_REGEX,
     MetricsRegistry,
@@ -96,6 +97,12 @@ app.add_middleware(
     absolute_timeout_seconds=settings.SESSION_ABSOLUTE_TIMEOUT_SECONDS,
     https_only=settings.APP_ENV not in ("development", "local", "test"),
 )
+
+# Added last so it becomes the OUTERMOST middleware (Starlette runs the
+# most-recently-added middleware first) -- an invalid Host is rejected
+# before the session middleware ever touches Redis, and before any route
+# or auth dependency runs. No-op when ALLOWED_HOSTS is unset (dev/test).
+app.add_middleware(HostValidationMiddleware, allowed_hosts=settings.allowed_hosts_list)
 
 BASE_DIR = Path(__file__).resolve().parent
 

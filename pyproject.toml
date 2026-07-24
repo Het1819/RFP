@@ -33,6 +33,7 @@ dev = [
     "pytest-asyncio>=1.4.0",
     "pytest-cov>=7.1.0",
     "reportlab>=5.0.0",
+    "requests>=2.32.0",
     "ruff>=0.15.19",
 ]
 
