@@ -6,12 +6,18 @@ This runbook documents the procedures for deployment rehearsals, rollback drills
 
 ## 1. Staging Deployment Rehearsal
 
-To execute a staging deployment:
-1. Copy the staging environment configuration:
+Using the Compose-based production stack (`docker-compose.prod.yml`),
+secrets come from mounted files under `secrets/`, not a `.env` file. To
+execute a rehearsal:
+1. Generate local validation secrets:
    ```bash
-   cp .env.staging.example .env
+   uv run python scripts/generate_local_prod_secrets.py
+   uv run python scripts/generate_local_prod_secrets.py --import-anthropic-key
    ```
-2. Edit `.env` to configure your keys (e.g., `SESSION_SECRET_KEY`, `DATABASE_URL`, `REDIS_URL`).
+2. Set the non-secret model name (optional; defaults to `claude-sonnet-4-6`):
+   ```bash
+   export LLM_MODEL=claude-sonnet-4-6
+   ```
 3. Build the production Docker image:
    ```bash
    docker build -t rfp-architect-mvp:pilot .
@@ -26,8 +32,13 @@ To execute a staging deployment:
    ```
 6. Run the local smoke tests:
    ```bash
-   powershell -ExecutionPolicy Bypass -File scripts/smoke_test.ps1 -BaseUrl "http://localhost:8000"
+   powershell -ExecutionPolicy Bypass -File scripts/smoke_test.ps1 -BaseUrl "http://127.0.0.1:8000"
    ```
+
+If you are instead deploying to a genuinely separate staging host (not
+this repo's Compose stack), `.env.staging.example` remains the template
+for that path — copy it to `.env` and replace every placeholder with a
+real secret; do not set `LLM_PROVIDER=fake` there either.
 
 ---
 
@@ -74,10 +85,10 @@ If the failed version introduced new migrations, rollback the database schema:
 ### Step 2.5: When NOT to Roll Back Automatically
 Do not perform automatic schema rollbacks if:
 - The database contains new critical records that cannot be recovered after dropping columns/tables.
-- The failure is isolated to a third-party API outage (e.g. Anthropic/OpenAI API downtime). Instead, toggle `LLM_PROVIDER=fake` in `.env` to restore service in degraded mode.
+- The failure is isolated to a third-party API outage (e.g. Anthropic API downtime). Do **not** toggle `LLM_PROVIDER=fake` to "restore service" — the fake provider is rejected at startup outside development/local/test and must never run against real pilot data. During an Anthropic outage, degrade by pausing document-processing jobs (leave them `QUEUED` for retry) rather than swapping providers.
 
 ### Step 2.6: Preserve Uploaded Files and Audit Logs
-* **Uploaded Files:** The `storage/uploads` directory is mapped as a persistent volume in Docker Compose. Ensure you do not run `docker compose down -v` (which deletes volumes).
+* **Uploaded Files:** Uploaded/source documents live under `LOCAL_STORAGE_PATH` (`/data/storage` in the production Compose config), backed by the `app_storage` named volume. Ensure you do not run `docker compose down -v` (which deletes volumes) -- recreating the `app` container alone (`docker compose up -d --force-recreate app`) does not touch the volume and documents survive.
 * **Audit Logs:** Ensure the log files under container stdout or host paths are preserved. Do not clear host log locations during container recreation.
 
 ### Step 2.7: Verify Rollback
@@ -121,12 +132,13 @@ docker compose -f docker-compose.prod.yml exec postgres psql -U rfp_user -d rfp_
 ```
 
 ### Step 3.4: Verify Uploaded Files / Object Storage
-Ensure uploaded documents in `storage/uploads` match the database metadata records.
-Run a custom test script or perform file list check:
+Ensure uploaded documents under `LOCAL_STORAGE_PATH` (`/data/storage/documents`
+in the production Compose config, backed by the `app_storage` volume) match
+the database metadata records:
 ```bash
-ls -la storage/uploads/
+docker compose -f docker-compose.prod.yml exec app ls -la /data/storage/documents/
 ```
-Verify that files referenced in `document` database table exist in the folder.
+Verify that files referenced in the `document` database table exist in the folder.
 
 ### Step 3.5: Verify Redis Queue Behavior
 Note that Redis persistence (via Append-Only File / AOF) is enabled to protect active background jobs, but it is **not a substitute for PostgreSQL database backups**. 

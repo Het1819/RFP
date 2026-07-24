@@ -44,7 +44,7 @@ async def enqueue_to_redis(job_id: uuid.UUID) -> None:
     from arq import create_pool
     from arq.connections import RedisSettings
 
-    redis = await create_pool(RedisSettings.from_dsn(settings.REDIS_URL))
+    redis = await create_pool(RedisSettings.from_dsn(settings.effective_redis_url))
     await redis.enqueue_job("process_document_task", str(job_id))
     await redis.close()
 

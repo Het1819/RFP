@@ -1,51 +1,151 @@
+# Production-like Docker Compose stack (Phase A3).
+#
+# IMPORTANT: this stack is NOT externally deployable as-is. The app is
+# bound to 127.0.0.1 only (loopback) -- there is no TLS termination or
+# reverse proxy yet. That is Phase A4. This file is for local
+# production-configuration validation, not for exposing a public endpoint.
+#
+# All secrets are Docker Compose file-based secrets read from ./secrets/
+# (gitignored; never committed). Generate local validation secrets with:
+#
+#   uv run python scripts/generate_local_prod_secrets.py
+#
+# You must separately provide:
+#   - ./secrets/anthropic_api_key.txt   (see the generator's --help)
+#   - LLM_MODEL (env var, non-secret, e.g. claude-sonnet-4-6)
+#
+# Local Compose secret FILES are mounted files on disk -- this is NOT an
+# enterprise secret manager and is NOT proof of encrypted storage. Treat it
+# as what it is: keeping secrets out of the Compose YAML and out of
+# `docker inspect` environment output, nothing more.
+
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
+    networks:
+      - backend
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     environment:
-      - APP_ENV=production
-      - AUTH_MODE=session
-      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
-      - DATABASE_URL=postgresql+psycopg://rfp_user:rfp_password@postgres:5432/rfp_architect
-      - REDIS_URL=redis://redis:6379/0
-      - QUEUE_ENABLED=true
-      - LLM_PROVIDER=fake
+      APP_ENV: production
+      AUTH_MODE: session
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: rfp_architect
+      DB_USER: rfp_user
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      QUEUE_ENABLED: "true"
+      LLM_PROVIDER: anthropic
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-6}
+      ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_PATH: /data/storage
+      APP_SECRET_KEY_FILE: /run/secrets/app_secret
+      SESSION_SECRET_KEY_FILE: /run/secrets/session_secret
+      LOGIN_THROTTLE_SECRET_FILE: /run/secrets/throttle_secret
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+    secrets:
+      - app_secret
+      - session_secret
+      - throttle_secret
+      - postgres_password
+      - redis_password
+      - anthropic_api_key
+    volumes:
+      - app_storage:/data/storage
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    # Capped restarts: a permanent configuration failure (e.g. a missing
+    # secret) must not spin the container forever -- it exits fast (config
+    # validation fails at Settings() construction) and stops after 3 tries
+    # so the failure is visible instead of buried in an endless loop.
+    restart: on-failure:3
 
   worker:
     build:
       context: .
       dockerfile: Dockerfile
     command: ["arq", "app.worker.WorkerSettings"]
+    networks:
+      - backend
     environment:
-      - APP_ENV=production
-      - AUTH_MODE=session
-      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
-      - DATABASE_URL=postgresql+psycopg://rfp_user:rfp_password@postgres:5432/rfp_architect
-      - REDIS_URL=redis://redis:6379/0
-      - QUEUE_ENABLED=true
-      - LLM_PROVIDER=fake
+      APP_ENV: production
+      # AUTH_MODE/session/throttle config is not functionally used by the
+      # worker process, but it imports the same app.core.config.Settings
+      # class as the web app, and Settings' production validators are not
+      # (yet) process-role-aware -- they require session/throttle secrets
+      # unconditionally in production regardless of which process
+      # constructs Settings(). Narrowing this is a documented follow-up
+      # (see PR description); for now the worker mounts the same secret
+      # set as the app rather than silently working around shared
+      # validation.
+      AUTH_MODE: session
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: rfp_architect
+      DB_USER: rfp_user
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      QUEUE_ENABLED: "true"
+      LLM_PROVIDER: anthropic
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-6}
+      ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_PATH: /data/storage
+      APP_SECRET_KEY_FILE: /run/secrets/app_secret
+      SESSION_SECRET_KEY_FILE: /run/secrets/session_secret
+      LOGIN_THROTTLE_SECRET_FILE: /run/secrets/throttle_secret
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+    secrets:
+      - app_secret
+      - session_secret
+      - throttle_secret
+      - postgres_password
+      - redis_password
+      - anthropic_api_key
+    volumes:
+      - app_storage:/data/storage
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
+    # NOTE (worker readiness limitation): arq has no built-in HTTP
+    # endpoint, so there is no real readiness probe here -- Docker can only
+    # tell you the process is alive, not that it is actually connected to
+    # Redis and processing jobs. Verify with `docker compose logs worker`
+    # and by checking that queued jobs transition out of QUEUED. A real
+    # worker health signal is a recommended A4+ follow-up.
+    restart: on-failure:3
 
   postgres:
-    image: pgvector/pgvector:pg16
+    # pgvector/pgvector:pg16, resolved 2026-07-24 via
+    # `docker pull pgvector/pgvector:pg16`.
+    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+    networks:
+      - backend
     environment:
       POSTGRES_DB: rfp_architect
       POSTGRES_USER: rfp_user
-      POSTGRES_PASSWORD: rfp_password
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -54,19 +154,58 @@ services:
       timeout: 5s
       retries: 20
     restart: unless-stopped
+    # No `ports:` -- PostgreSQL is reachable only from other containers on
+    # the backend network, never from the host or the public internet.
 
   redis:
-    image: redis:7-alpine
-    command: redis-server --appendonly yes
+    # redis:7-alpine, resolved 2026-07-24 via `docker pull redis:7-alpine`.
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    networks:
+      - backend
+    # Config (including `requirepass`) comes from a mounted secret file,
+    # not a CLI argument or environment variable -- so the password never
+    # appears in `docker inspect`'s static Config.Cmd/Config.Env, and
+    # `--appendonly yes` inside that same file keeps AOF persistence on.
+    command: ["redis-server", "/run/secrets/redis_conf"]
+    secrets:
+      - redis_conf
+      - redis_password
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" --no-auth-warning ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 20
     restart: unless-stopped
+    # No `ports:` -- Redis is reachable only from other containers on the
+    # backend network, never from the host or the public internet.
+
+networks:
+  backend:
+    # Deliberately NOT `internal: true`: app/worker need outbound HTTPS to
+    # the Anthropic API. Postgres/Redis stay unreachable from outside this
+    # Compose project because they publish no host ports at all, not
+    # because the network itself is cut off from the internet.
+    driver: bridge
 
 volumes:
   postgres_data:
   redis_data:
+  app_storage:
+
+secrets:
+  app_secret:
+    file: ./secrets/app_secret.txt
+  session_secret:
+    file: ./secrets/session_secret.txt
+  throttle_secret:
+    file: ./secrets/throttle_secret.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  redis_conf:
+    file: ./secrets/redis.conf
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key.txt

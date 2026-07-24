@@ -117,10 +117,23 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Generate CI-only Compose secrets
+        run: |
+          uv run python scripts/generate_local_prod_secrets.py
+          printf 'ci-only-fake-anthropic-key-not-real\n' > secrets/anthropic_api_key.txt
+
       - name: Validate Docker Compose Config
         run: docker compose -f docker-compose.prod.yml config
-        env:
-          SESSION_SECRET_KEY: "test-session-secret-key-32-chars-minimum"
 
       - name: Build Docker Image
         run: docker build -t rfp-architect-mvp:ci .

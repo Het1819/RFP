@@ -35,6 +35,6 @@ async def process_document_task(ctx: Any, job_id_str: str) -> None:
 
 class WorkerSettings:
     functions: ClassVar[list[Any]] = [process_document_task]
-    redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)
+    redis_settings = RedisSettings.from_dsn(settings.effective_redis_url)
     job_timeout = settings.JOB_TIMEOUT_SECONDS
     max_jobs = 4
