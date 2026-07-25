@@ -143,17 +143,30 @@ class TestStorageAndLifecycleGaps:
         assert "documents" in Path(doc.file_path).parts
         assert "quarantine" not in str(doc.file_path).lower()
 
+    @pytest.mark.skip(
+        reason="fixed in A5a task 3: Document.quarantined_at column added"
+    )
     def test_item6_no_quarantine_lifecycle_field_exists(self) -> None:
         """Document has no quarantine-state column as of A4."""
         assert not hasattr(Document, "quarantined_at")
 
+    @pytest.mark.skip(
+        reason=(
+            "fixed in A5a task 3: Document.sha256_digest and "
+            "detected_content_type columns added"
+        )
+    )
     def test_item7_no_content_hash_or_detected_type_field_exists(self) -> None:
         assert not hasattr(Document, "sha256_digest")
         assert not hasattr(Document, "detected_content_type")
 
+    @pytest.mark.skip(reason="fixed in A5a task 3: Document.scan_status column added")
     def test_item8_no_malware_scan_state_field_exists(self) -> None:
         assert not hasattr(Document, "scan_status")
 
+    @pytest.mark.skip(
+        reason=("fixed in A5a task 3: Document.scan_signature_version column added")
+    )
     def test_item9_no_signature_freshness_field_exists(self) -> None:
         assert not hasattr(Document, "scan_signature_version")
 
@@ -215,9 +228,10 @@ class TestNoContentPolicyOrSandboxing:
         # The same function receives the live DB session as a parameter and
         # uses it throughout (e.g. `db.commit()`), confirming the parsing
         # code path runs with an active DB session, not an isolated process.
-        assert "db" in inspect.signature(
-            project_service.process_job_pipeline_async
-        ).parameters
+        assert (
+            "db"
+            in inspect.signature(project_service.process_job_pipeline_async).parameters
+        )
         assert "db.commit()" in src
 
     def test_item16_no_per_document_resource_limit_module_exists(self) -> None:

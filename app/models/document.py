@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -50,6 +50,39 @@ class Document(Base):
         onupdate=lambda: datetime.now(UTC),
         nullable=False,
     )
+
+    ingestion_status: Mapped[str] = mapped_column(
+        String(30),
+        default="QUARANTINED",
+        server_default="LEGACY_UNVERIFIED",
+        nullable=False,
+    )
+    display_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    detected_content_type: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    sha256_digest: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    file_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    quarantined_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    scan_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    scan_engine_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    scan_signature_version: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    scan_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    content_policy_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    parser_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    parser_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    rejection_reason_code: Mapped[str | None] = mapped_column(
+        String(100), nullable=True
+    )
+    operator_failure_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     pages: Mapped[list["DocumentPage"]] = relationship(
         "DocumentPage", back_populates="document", cascade="all, delete-orphan"

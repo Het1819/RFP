@@ -9,14 +9,6 @@ that pass structural validation, detected-type validation, malware
 scanning, and content-policy inspection may reach CLEAN; only CLEAN
 files may be parsed; only successfully parsed documents may reach
 COMPLETED and enter requirement extraction.
-
-Note: as of this module's introduction, app.models.document.Document does
-not yet declare an `ingestion_status` mapped column (that lands in a
-follow-up task that adds the security-metadata migration). transition()
-still reads/writes `document.ingestion_status` as a plain attribute -
-this works fine on any Python object, mapped or not, it just means the
-value will not persist to a real database column until that column
-exists on the model.
 """
 
 from __future__ import annotations
@@ -120,11 +112,7 @@ def transition(
     if new_status not in IngestionStatus.ALL:
         raise IngestionStateError(f"Unknown ingestion status: {new_status!r}")
 
-    # NOTE: Document does not declare ingestion_status / rejection_reason_code /
-    # operator_failure_summary as mapped columns yet (pending a follow-up
-    # migration + model task). These are plain attribute reads/writes on the
-    # Document instance until that lands, hence the attr-defined ignores.
-    current = document.ingestion_status  # type: ignore[attr-defined]
+    current = document.ingestion_status
     if current == new_status:
         return  # idempotent no-op, no duplicate audit event
 
@@ -134,11 +122,11 @@ def transition(
             f"Illegal ingestion transition: {current} -> {new_status}"
         )
 
-    document.ingestion_status = new_status  # type: ignore[attr-defined]
+    document.ingestion_status = new_status
     if reason_code is not None:
-        document.rejection_reason_code = reason_code  # type: ignore[attr-defined]
+        document.rejection_reason_code = reason_code
     if safe_summary is not None:
-        document.operator_failure_summary = safe_summary  # type: ignore[attr-defined]
+        document.operator_failure_summary = safe_summary
 
     details: dict[str, Any] = {"from": current, "to": new_status}
     if reason_code is not None:
