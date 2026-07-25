@@ -212,16 +212,34 @@ class TestResolveQuarantinePath:
         with pytest.raises((QuarantineStorageError, ValueError)):
             resolve_quarantine_path(bad_id)  # type: ignore[arg-type]
 
-    def test_traversal_attempt_never_escapes_root(self) -> None:
-        # Even in the (rejected) traversal cases, confirm no file gets
-        # created outside the quarantine root as a side effect.
-        root = Path(settings.QUARANTINE_STORAGE_PATH).resolve()
-        outside_marker = root.parent / "escaped-file-marker"
+    def test_symlink_pointing_inside_root_is_still_rejected(
+        self, tmp_path: Path
+    ) -> None:
+        # Regression test for the symlink-check-ordering bug: a symlink at
+        # the storage-id path that points to ANOTHER file *inside* the
+        # quarantine root must still be rejected. Checking `is_symlink()`
+        # after `.resolve()` would make this pass containment silently
+        # (both paths are under root) and return the linked-to file's real
+        # path with no rejection at all -- `is_symlink()` on an
+        # already-dereferenced path is always False. On POSIX this is
+        # exercised directly via os.symlink(); skipped on Windows where
+        # symlink creation typically requires elevated privileges.
+        if os.name != "posix":
+            pytest.skip("POSIX-only symlink check")
+        root = Path(settings.QUARANTINE_STORAGE_PATH)
+        root.mkdir(parents=True, exist_ok=True)
+        real_target = root / "inside-target.upload"
+        real_target.write_text("real file inside root")
+        storage_id = uuid.uuid4()
+        link_path = root / f"{storage_id}.upload"
+        os.symlink(real_target, link_path)
         try:
-            with pytest.raises((QuarantineStorageError, ValueError)):
-                resolve_quarantine_path("../escaped-file-marker")  # type: ignore[arg-type]
+            with pytest.raises(QuarantineStorageError) as exc:
+                resolve_quarantine_path(storage_id)
+            assert exc.value.code == "SYMLINK_REJECTED"
         finally:
-            assert not outside_marker.exists()
+            link_path.unlink()
+            real_target.unlink()
 
 
 class TestDeleteQuarantineFile:

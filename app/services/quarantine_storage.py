@@ -123,12 +123,19 @@ def resolve_quarantine_path(storage_id: uuid.UUID | str) -> Path:
         raise QuarantineStorageError("INVALID_IDENTIFIER") from exc
 
     root = _quarantine_root()
-    candidate = (root / f"{validated_id}{_STORAGE_SUFFIX}").resolve()
+    unresolved = root / f"{validated_id}{_STORAGE_SUFFIX}"
 
+    # Symlink-ness MUST be checked on the unresolved path. `Path.resolve()`
+    # fully dereferences symlinks (including in the final path component,
+    # like `os.path.realpath`), so checking `is_symlink()` on an
+    # already-resolved path can never be true -- it would silently follow
+    # an attacker-planted symlink instead of rejecting it.
+    if unresolved.is_symlink():
+        raise QuarantineStorageError("SYMLINK_REJECTED")
+
+    candidate = unresolved.resolve()
     if candidate.parent != root:
         raise QuarantineStorageError("PATH_ESCAPE")
-    if candidate.is_symlink():
-        raise QuarantineStorageError("SYMLINK_REJECTED")
     return candidate
 
 
@@ -189,7 +196,12 @@ def stream_upload_to_quarantine(
         # the (practically impossible outside of tests) case of a UUID
         # collision on the *final* name, and behaves consistently across
         # platforms even though POSIX os.rename() would otherwise silently
-        # replace an existing destination while Windows would raise.
+        # replace an existing destination while Windows would raise. This
+        # is a non-atomic check-then-act (TOCTOU): another process could
+        # create `final_path` between this check and the `os.rename()`
+        # below. That race is acceptable here because `storage_id` is a
+        # CSPRNG-random UUID (uuid4()), never attacker-controlled, so no
+        # adversary can predict or target the exact `final_path` to win it.
         if final_path.exists():
             raise QuarantineStorageError("IDENTIFIER_COLLISION")
         os.rename(partial_path, final_path)
