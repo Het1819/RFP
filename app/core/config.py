@@ -1,5 +1,6 @@
 import logging
 import secrets
+from pathlib import Path
 from urllib.parse import quote
 
 from pydantic import Field, field_validator, model_validator
@@ -127,6 +128,10 @@ class Settings(BaseSettings):
     STORAGE_BACKEND: str = "local"
     LOCAL_STORAGE_PATH: str = "./data"
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10 MB default
+    QUARANTINE_STORAGE_PATH: str = "./data/quarantine"
+    QUARANTINE_CHUNK_SIZE_BYTES: int = 1024 * 1024  # 1 MiB
+    MAX_DISPLAY_FILENAME_LENGTH: int = 255
+    DOCX_DETECTION_MAX_MEMBERS: int = 5000
     LLM_PROVIDER: str = "fake"
     ANTHROPIC_API_KEY: str = ""
     LLM_MODEL: str = ""
@@ -447,7 +452,36 @@ class Settings(BaseSettings):
                     "mounted volume in production-like environments"
                 )
 
-        # 15: cookie name must be explicitly set (never empty/blank), and in
+        # 15: quarantine storage must be a real, distinct, absolute mounted
+        # path in production-like environments - never the repo-relative
+        # dev default, and never the same directory as clean document
+        # storage (quarantine and clean documents must never share a root).
+        if self.STORAGE_BACKEND == "local":
+            if (
+                self.QUARANTINE_STORAGE_PATH == "./data/quarantine"
+                or not self.QUARANTINE_STORAGE_PATH
+            ):
+                raise ValueError(
+                    "QUARANTINE_STORAGE_PATH must be set to a persistent "
+                    "mounted path (not the './data/quarantine' development "
+                    "default) in production-like environments"
+                )
+            if not self.QUARANTINE_STORAGE_PATH.startswith("/"):
+                raise ValueError(
+                    "QUARANTINE_STORAGE_PATH must be an absolute path to a "
+                    "mounted volume in production-like environments"
+                )
+            if (
+                Path(self.QUARANTINE_STORAGE_PATH).resolve()
+                == Path(self.LOCAL_STORAGE_PATH).resolve()
+            ):
+                raise ValueError(
+                    "QUARANTINE_STORAGE_PATH must differ from "
+                    "LOCAL_STORAGE_PATH - quarantine and clean document "
+                    "storage must be separate directories"
+                )
+
+        # 16: cookie name must be explicitly set (never empty/blank), and in
         # production must use the `__Host-` prefix. Browsers only accept a
         # `__Host-` cookie when it also has Secure, Path=/, and no Domain --
         # ServerSessionMiddleware always sets those three in production
