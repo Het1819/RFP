@@ -20,11 +20,42 @@ class TestDocumentSecurityMetadataFields:
         assert cols["content_policy_status"].type.length == 30
         assert cols["rejection_reason_code"].type.length == 100
 
-    def test_new_document_defaults_to_quarantined_in_orm(self, db) -> None:
-        """New rows created via the ORM (not the migration's server_default
-        path) should explicitly pass ingestion_status - this test documents
-        that the model itself does not silently default new documents to
-        LEGACY_UNVERIFIED; only the migration's backfill does."""
+    def test_new_document_defaults_to_legacy_unverified_in_orm(self, db) -> None:
+        """New rows created via the ORM without explicitly passing
+        ingestion_status get the honest LEGACY_UNVERIFIED default (matching
+        the migration's server_default) until A5b's real upload-flow
+        rewiring explicitly sets QUARANTINED at the real upload call
+        sites."""
+        org_id, user_id = get_default_org_and_user(db)
+
+        project = ProposalProject(
+            organization_id=org_id,
+            created_by_id=user_id,
+            name="Ingestion metadata test project",
+            client_name="Acme Corp",
+            status="draft",
+        )
+        db.add(project)
+        db.commit()
+
+        doc = Document(
+            project_id=project.id,
+            name="test.pdf",
+            file_path="/data/storage/documents/x.pdf",
+            file_type="application/pdf",
+            created_by_id=user_id,
+        )
+        db.add(doc)
+        db.commit()
+        assert doc.ingestion_status == "LEGACY_UNVERIFIED"
+
+    def test_explicit_quarantined_ingestion_status_is_stored_correctly(
+        self, db
+    ) -> None:
+        """Explicitly passing ingestion_status=IngestionStatus.QUARANTINED at
+        construction still works and is stored correctly - this is the
+        pattern A5b's real upload call sites will use once quarantine
+        storage exists."""
         from app.services.ingestion_state import IngestionStatus
 
         org_id, user_id = get_default_org_and_user(db)
@@ -32,7 +63,7 @@ class TestDocumentSecurityMetadataFields:
         project = ProposalProject(
             organization_id=org_id,
             created_by_id=user_id,
-            name="Ingestion metadata test project",
+            name="Ingestion metadata test project (explicit quarantine)",
             client_name="Acme Corp",
             status="draft",
         )

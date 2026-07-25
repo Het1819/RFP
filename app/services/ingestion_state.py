@@ -9,6 +9,14 @@ that pass structural validation, detected-type validation, malware
 scanning, and content-policy inspection may reach CLEAN; only CLEAN
 files may be parsed; only successfully parsed documents may reach
 COMPLETED and enter requirement extraction.
+
+NOTE: transition() does not itself provide concurrency safety - it is a
+plain read-modify-write against the ORM object passed in, with no row
+lock or optimistic-locking guard. Callers that may race with another
+worker on the same document (e.g. scan retry vs. a fresh scan) MUST
+acquire a row lock (e.g. `.with_for_update()`) or add a compare-and-swap
+UPDATE before calling this function. This is deferred to the phase that
+wires transition() into real worker/route code (A5d/A5e).
 """
 
 from __future__ import annotations
@@ -137,7 +145,7 @@ def transition(
             organization_id=org_id,
             user_id=user_id,
             action="document_ingestion_transition",
-            entity_type="document",
+            entity_type="Document",
             entity_id=document.id,
             details=details,
             request_id=request_id_var.get(),

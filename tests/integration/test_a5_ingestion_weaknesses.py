@@ -144,7 +144,9 @@ class TestStorageAndLifecycleGaps:
         assert "quarantine" not in str(doc.file_path).lower()
 
     @pytest.mark.skip(
-        reason="fixed in A5a task 3: Document.quarantined_at column added"
+        reason="assertion superseded in A5a task 3 (Document.quarantined_at "
+        "schema placeholder column added); behavioral remediation (actual "
+        "quarantine lifecycle) lands in A5b"
     )
     def test_item6_no_quarantine_lifecycle_field_exists(self) -> None:
         """Document has no quarantine-state column as of A4."""
@@ -152,20 +154,30 @@ class TestStorageAndLifecycleGaps:
 
     @pytest.mark.skip(
         reason=(
-            "fixed in A5a task 3: Document.sha256_digest and "
-            "detected_content_type columns added"
+            "assertion superseded in A5a task 3 (Document.sha256_digest and "
+            "detected_content_type schema placeholder columns added); "
+            "behavioral remediation (actual hash computation and "
+            "detected-type checking) lands in A5b"
         )
     )
     def test_item7_no_content_hash_or_detected_type_field_exists(self) -> None:
         assert not hasattr(Document, "sha256_digest")
         assert not hasattr(Document, "detected_content_type")
 
-    @pytest.mark.skip(reason="fixed in A5a task 3: Document.scan_status column added")
+    @pytest.mark.skip(
+        reason="assertion superseded in A5a task 3 (Document.scan_status "
+        "schema placeholder column added); behavioral remediation (actual "
+        "malware scanning) lands in A5d"
+    )
     def test_item8_no_malware_scan_state_field_exists(self) -> None:
         assert not hasattr(Document, "scan_status")
 
     @pytest.mark.skip(
-        reason=("fixed in A5a task 3: Document.scan_signature_version column added")
+        reason=(
+            "assertion superseded in A5a task 3 (Document.scan_signature_version "
+            "schema placeholder column added); behavioral remediation (actual "
+            "signature-freshness tracking) lands in A5d"
+        )
     )
     def test_item9_no_signature_freshness_field_exists(self) -> None:
         assert not hasattr(Document, "scan_signature_version")

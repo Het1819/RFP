@@ -1,19 +1,18 @@
 """Unit tests for the validated ingestion state machine.
 
-Document.ingestion_status does not exist as a mapped column yet (it lands
-in a follow-up task alongside the rest of the security-metadata columns
-and an Alembic migration). Since SQLAlchemy models are plain Python
-objects, `transition()` can still read/write `document.ingestion_status`
-as an ordinary attribute on an in-memory `Document()` instance - it just
-won't persist to a real database column. These tests therefore construct
-`Document()` instances directly (no `db.add()` / `db.commit()` on the
-document itself) and only use the real `db` fixture/session for the
-AuditEvent side effects that `transition()` writes, which map onto
-columns that already exist on `AuditEvent` today. `org_id`/`user_id` come
-from the real `get_default_org_and_user()` helper (see
-tests/integration/test_projects.py for the same pattern), which creates
-and commits an Organization/User pair the AuditEvent foreign keys can
-reference.
+Document.ingestion_status is a real mapped column (added in A5a task 3,
+alongside the rest of the security-metadata columns and an Alembic
+migration). Most tests in this module exercise `transition()`'s
+validation and audit-write logic against in-memory-only `Document()`
+instances (no `db.add()` / `db.commit()` on the document itself), using
+the real `db` fixture/session only for the AuditEvent side effects that
+`transition()` writes. `TestPersistedRoundTrip` below additionally
+persists a real `Document` row and confirms `transition()` writes
+through to the actual database column, not just an in-memory attribute.
+`org_id`/`user_id` come from the real `get_default_org_and_user()`
+helper (see tests/integration/test_projects.py for the same pattern),
+which creates and commits an Organization/User pair the AuditEvent
+foreign keys can reference.
 """
 
 import uuid
@@ -34,9 +33,9 @@ from app.services.ingestion_state import (
 def _make_document(user_id: uuid.UUID) -> Document:
     """Build an in-memory-only Document (never added/committed to `db`).
 
-    ingestion_status is set as a plain attribute since the mapped column
-    does not exist yet; that is exactly what this test suite is meant to
-    exercise against.
+    ingestion_status is set directly on the real mapped column but the
+    instance itself is never persisted; this exercises `transition()`'s
+    validation and audit-write logic without needing a Document row.
     """
     doc = Document(
         id=uuid.uuid4(),
@@ -134,3 +133,44 @@ class TestTransitionValidity:
         assert ALLOWED_TRANSITIONS[IngestionStatus.LEGACY_UNVERIFIED] == frozenset(
             {IngestionStatus.VALIDATING}
         )
+
+
+class TestPersistedRoundTrip:
+    def test_transition_persists_through_real_ingestion_status_column(self, db) -> None:
+        """Persist a real Document row, call transition() on it, then
+        re-fetch it from the database and confirm ingestion_status
+        actually round-tripped through the real mapped column - not
+        just an in-memory attribute."""
+        from app.models.project import ProposalProject
+
+        org_id, user_id = get_default_org_and_user(db)
+
+        project = ProposalProject(
+            organization_id=org_id,
+            created_by_id=user_id,
+            name="Ingestion state round-trip test project",
+            client_name="Acme Corp",
+            status="draft",
+        )
+        db.add(project)
+        db.commit()
+
+        doc = Document(
+            project_id=project.id,
+            name="test.pdf",
+            file_path="/data/storage/quarantine/x.pdf",
+            file_type="application/pdf",
+            created_by_id=user_id,
+            ingestion_status=IngestionStatus.QUARANTINED,
+        )
+        db.add(doc)
+        db.commit()
+
+        transition(db, doc, IngestionStatus.VALIDATING, org_id=org_id, user_id=user_id)
+
+        db.refresh(doc)
+        assert doc.ingestion_status == IngestionStatus.VALIDATING
+
+        refetched = db.get(Document, doc.id)
+        assert refetched is not None
+        assert refetched.ingestion_status == IngestionStatus.VALIDATING

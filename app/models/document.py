@@ -53,10 +53,12 @@ class Document(Base):
 
     ingestion_status: Mapped[str] = mapped_column(
         String(30),
-        default="QUARANTINED",
+        default="LEGACY_UNVERIFIED",
         server_default="LEGACY_UNVERIFIED",
         nullable=False,
-    )
+    )  # A5b must set ingestion_status=QUARANTINED explicitly at every real upload
+    # call site once quarantine storage exists; until then this honest default
+    # avoids falsely marking unquarantined rows as quarantined.
     display_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     detected_content_type: Mapped[str | None] = mapped_column(
         String(255), nullable=True
