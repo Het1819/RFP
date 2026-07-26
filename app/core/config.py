@@ -168,6 +168,14 @@ class Settings(BaseSettings):
     # against Document.scan_attempt_count to decide whether to re-arm
     # SCANNING; run_scan only records the attempt count and outcome.
     SCAN_MAX_ATTEMPTS: int = 3
+    # Bounded-retry backoff for SCAN_FAILED outcomes (Task 6, worker
+    # wiring). enqueue_scan_retry() computes delay = min(base * 2**(attempt
+    # - 1), max) then applies +/-50% jitter. Both the real-queue path
+    # (arq `_defer_by`) and the QUEUE_ENABLED=False sync fallback compute
+    # the same delay value; the sync fallback just does not actually wait
+    # on it (see app.services.malware_scan.run_scan_sync).
+    SCAN_RETRY_BACKOFF_BASE_SECONDS: int = 5
+    SCAN_RETRY_BACKOFF_MAX_SECONDS: int = 300
     # --- PDF content-policy inspection (Phase A5c) ---
     # The inspector itself runs in an isolated OS subprocess (see
     # app.services.pdf_inspector_subprocess) -- these settings bound both

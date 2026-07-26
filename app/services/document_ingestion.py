@@ -144,6 +144,10 @@ def ingest_uploaded_document(
         doc.detected_content_type = detection.canonical_mime
         db.commit()
         transition(db, doc, IngestionStatus.SCANNING, org_id=org_id, user_id=user_id)
+
+        from app.core.queue import enqueue_scan_job
+
+        enqueue_scan_job(doc.id)
     else:
         reason = (
             detection.reason_code if detection else _UNSUPPORTED_EXTENSION_REASON_CODE

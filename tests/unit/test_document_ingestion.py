@@ -27,6 +27,23 @@ def _pdf_upload(content: bytes | None = None, filename: str = "rfp.pdf") -> Uplo
     )
 
 
+@pytest.fixture(autouse=True)
+def _stub_enqueue_scan_job(monkeypatch):
+    """These tests exercise document_ingestion.py's own orchestration in
+    isolation (quarantine -> QUARANTINED -> VALIDATING -> SCANNING/
+    REJECTED_TYPE). As of A5c Task 6, reaching SCANNING also calls
+    enqueue_scan_job(), which -- with QUEUE_ENABLED=false, the test-suite
+    default -- would otherwise run a real scan attempt synchronously
+    in-process (including a real ClamAV socket connection) and mutate the
+    document past SCANNING. Stub it to a no-op by default so these tests
+    keep asserting document_ingestion.py's own behavior; the dedicated
+    wiring test below re-patches enqueue_scan_job locally to assert it is
+    actually called."""
+    import app.core.queue as queue_mod
+
+    monkeypatch.setattr(queue_mod, "enqueue_scan_job", lambda document_id: None)
+
+
 class TestIngestUploadedDocument:
     def test_valid_pdf_reaches_scanning(self, db, org_project_user) -> None:
         org, project, user = org_project_user
@@ -87,6 +104,32 @@ class TestIngestUploadedDocument:
         )
         assert seen_statuses[0] == IngestionStatus.VALIDATING
         assert IngestionStatus.SCANNING in seen_statuses
+
+    def test_scanning_branch_enqueues_scan_job_exactly_once(
+        self, db, org_project_user, monkeypatch
+    ) -> None:
+        """A5c Task 6: the SCANNING branch now calls enqueue_scan_job
+        immediately after the transition to SCANNING, so a document never
+        sits in SCANNING with nothing to actually scan it."""
+        org, project, user = org_project_user
+        import app.core.queue as queue_mod
+
+        calls: list = []
+        monkeypatch.setattr(
+            queue_mod, "enqueue_scan_job", lambda document_id: calls.append(document_id)
+        )
+
+        doc = ingest_uploaded_document(
+            db,
+            project=project,
+            org_id=org.id,
+            user_id=user.id,
+            upload=_pdf_upload(),
+            doc_role="rfp",
+        )
+
+        assert doc.ingestion_status == IngestionStatus.SCANNING
+        assert calls == [doc.id]
 
     def test_no_processing_job_created(self, db, org_project_user) -> None:
         org, project, user = org_project_user
