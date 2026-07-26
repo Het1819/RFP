@@ -279,7 +279,21 @@
                                             <div style="background: var(--surface-secondary); border: 1px solid var(--border-color); padding: var(--space-sm); border-radius: var(--radius-md); display: flex; flex-direction: column; gap: 4px;">
                                                 <div style="display: flex; justify-content: space-between; align-items: start; gap: var(--space-sm);">
                                                     <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">{{ doc.name }}</span>
-                                                    <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0;">{{ doc.approval_status }}</span>
+                                                    {% if doc.ingestion_status == "COMPLETED" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0;">{{ doc.approval_status }}</span>
+                                                    {% elif doc.ingestion_status == "QUARANTINED" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--surface-tertiary); border-color: var(--border-color); color: var(--text-secondary);">Upload received</span>
+                                                    {% elif doc.ingestion_status == "VALIDATING" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--surface-tertiary); border-color: var(--border-color); color: var(--text-secondary);">Validating document type</span>
+                                                    {% elif doc.ingestion_status == "SCANNING" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--surface-tertiary); border-color: var(--border-color); color: var(--text-secondary);">Awaiting security scan</span>
+                                                    {% elif doc.ingestion_status == "REJECTED_TYPE" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--status-needs-evidence-bg); border-color: rgba(180, 35, 24, 0.3); color: var(--status-needs-evidence);">Document rejected &mdash; upload a valid PDF or DOCX</span>
+                                                    {% elif doc.ingestion_status == "LEGACY_UNVERIFIED" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--surface-tertiary); border-color: var(--border-color); color: var(--text-secondary);">Requires security reprocessing</span>
+                                                    {% else %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--surface-tertiary); border-color: var(--border-color); color: var(--text-secondary);">Pending security processing</span>
+                                                    {% endif %}
                                                 </div>
                                                 <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted);">
                                                     <span>Owner: {{ doc.owner_name or 'N/A' }}</span>

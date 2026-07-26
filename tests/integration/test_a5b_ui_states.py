@@ -176,3 +176,73 @@ class TestQuarantineUiStates:
 
         assert resp.status_code == 200
         assert "Open Compliance Matrix" not in resp.text
+
+    def test_rejected_type_knowledge_doc_not_shown_as_ordinary_pending(
+        self, client, db, org_project_user
+    ) -> None:
+        # Knowledge documents go through the same ingest_uploaded_document()
+        # pipeline as the RFP document, but the `knowledge_docs` query in
+        # projects.py has no ingestion_status filter (unlike
+        # get_project_document for the RFP), so a REJECTED_TYPE knowledge
+        # row IS rendered in the "Uploaded Materials" list. Every new
+        # knowledge doc is also forced to approval_status="PENDING" at
+        # upload time, so without an ingestion_status-aware badge a
+        # rejected upload would be indistinguishable from an ordinary
+        # PENDING document awaiting review.
+        _org, project, user = org_project_user
+        doc = Document(
+            project_id=project.id,
+            name="rejected.pdf",
+            file_path="/tmp/rejected.pdf",
+            file_type="application/pdf",
+            doc_role="knowledge_base",
+            approval_status="PENDING",
+            ingestion_status=IngestionStatus.REJECTED_TYPE,
+            processing_error="Traceback (most recent call last): raw internal error",
+            created_by_id=user.id,
+        )
+        db.add(doc)
+        db.commit()
+
+        resp = client.get(f"/projects/{project.id}")
+
+        assert resp.status_code == 200
+        assert "Document rejected" in resp.text
+        assert "Traceback" not in resp.text
+        assert str(doc.file_path) not in resp.text
+
+    def test_scanning_knowledge_doc_distinguishable_from_completed_pending(
+        self, client, db, org_project_user
+    ) -> None:
+        _org, project, user = org_project_user
+        scanning_doc = Document(
+            project_id=project.id,
+            name="scanning.pdf",
+            file_path="/tmp/scanning.pdf",
+            file_type="application/pdf",
+            doc_role="knowledge_base",
+            approval_status="PENDING",
+            ingestion_status=IngestionStatus.SCANNING,
+            created_by_id=user.id,
+        )
+        completed_doc = Document(
+            project_id=project.id,
+            name="completed.pdf",
+            file_path="/tmp/completed.pdf",
+            file_type="application/pdf",
+            doc_role="knowledge_base",
+            approval_status="PENDING",
+            ingestion_status=IngestionStatus.COMPLETED,
+            created_by_id=user.id,
+        )
+        db.add_all([scanning_doc, completed_doc])
+        db.commit()
+
+        resp = client.get(f"/projects/{project.id}")
+
+        assert resp.status_code == 200
+        # The scanning doc must show the safe ingestion-status label...
+        assert "Awaiting security scan" in resp.text
+        # ...and the completed doc must still show its ordinary review
+        # status, distinct from the scanning doc's label.
+        assert "PENDING" in resp.text
