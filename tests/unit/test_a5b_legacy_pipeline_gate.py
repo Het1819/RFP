@@ -87,9 +87,7 @@ class TestRetrievalGatedByIngestionStatus:
 
 
 class TestEvidenceValidationGatedByIngestionStatus:
-    def test_scanning_document_rejected_as_evidence(
-        self, db, org_project_user
-    ) -> None:
+    def test_scanning_document_rejected_as_evidence(self, db, org_project_user) -> None:
         _org, project, user = org_project_user
         doc = Document(
             project_id=project.id,

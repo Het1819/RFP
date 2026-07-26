@@ -72,9 +72,10 @@ def test_knowledge_upload_route_reaches_scanning_and_forces_pending(client, db):
         select(DocumentPage).where(DocumentPage.document_id == doc.id)
     ).all()
     assert pages == []
-    assert db.scalar(
-        select(ProcessingJob).where(ProcessingJob.document_id == doc.id)
-    ) is None
+    assert (
+        db.scalar(select(ProcessingJob).where(ProcessingJob.document_id == doc.id))
+        is None
+    )
 
     # Verify audit event for the quarantine write.
     audit = db.scalars(
