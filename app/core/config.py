@@ -164,9 +164,12 @@ class Settings(BaseSettings):
     # invocations) a document may accumulate before it is left in
     # SCAN_FAILED as the operator-visible terminal-for-now state instead
     # of being eligible for a further bounded retry. The retry scheduler
-    # itself (Task 6, worker wiring - not yet built) is what reads this
-    # against Document.scan_attempt_count to decide whether to re-arm
-    # SCANNING; run_scan only records the attempt count and outcome.
+    # (Task 6, worker wiring: app.services.malware_scan.prepare_scan_attempt,
+    # called from both run_scan_sync and app.worker.scan_document_task) is
+    # what reads this against Document.scan_attempt_count, under the same
+    # row lock run_scan itself uses, to decide whether to re-arm SCANNING
+    # for another attempt; run_scan only records the attempt count and
+    # outcome.
     SCAN_MAX_ATTEMPTS: int = 3
     # Bounded-retry backoff for SCAN_FAILED outcomes (Task 6, worker
     # wiring). enqueue_scan_retry() computes delay = min(base * 2**(attempt

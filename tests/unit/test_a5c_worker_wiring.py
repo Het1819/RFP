@@ -5,7 +5,10 @@ Covers: enqueue_scan_job's QUEUE_ENABLED=false sync fallback never
 touches Redis; enqueue_scan_retry's backoff math (monotonic, jittered,
 capped); app.worker.scan_document_task invokes run_scan for a real
 document and no-ops for a missing document id; no ProcessingJob row is
-ever created by any of these paths.
+ever created by any of these paths; prepare_scan_attempt (shared by both
+run_scan_sync and scan_document_task) never re-arms an already-exhausted
+SCAN_FAILED document, and acquires the same row lock run_scan itself uses
+before re-arming.
 """
 
 import asyncio
@@ -254,3 +257,156 @@ class TestScanDocumentTask:
         asyncio.run(worker_mod.scan_document_task(None, str(doc.id)))
 
         assert seen_status_at_call == [IngestionStatus.SCANNING]
+
+
+class TestPrepareScanAttemptExhaustionGuard:
+    """Regression coverage for review finding 1: prepare_scan_attempt must
+    re-check scan_attempt_count against SCAN_MAX_ATTEMPTS at the moment it
+    is about to re-arm, not rely solely on the caller's post-run_scan
+    check -- run_scan itself unconditionally increments
+    scan_attempt_count on every call, so under arq's at-least-once
+    delivery a stray/duplicate retry invocation for an already-exhausted
+    document must not re-arm it for one more attempt."""
+
+    def test_prepare_scan_attempt_returns_none_and_leaves_terminal(
+        self, db, org_project_user, monkeypatch
+    ) -> None:
+        _org, project, user = org_project_user
+        monkeypatch.setattr(settings, "SCAN_MAX_ATTEMPTS", 3)
+        doc = _make_document(
+            db,
+            project,
+            user,
+            ingestion_status=IngestionStatus.SCAN_FAILED,
+            scan_attempt_count=3,
+        )
+
+        org_id = malware_scan.prepare_scan_attempt(db, doc.id)
+
+        assert org_id is None
+        db.refresh(doc)
+        assert doc.ingestion_status == IngestionStatus.SCAN_FAILED
+        assert doc.scan_attempt_count == 3
+
+    def test_run_scan_sync_does_not_call_run_scan_when_exhausted(
+        self, db, org_project_user, monkeypatch
+    ) -> None:
+        _org, project, user = org_project_user
+        monkeypatch.setattr(settings, "SCAN_MAX_ATTEMPTS", 3)
+        doc = _make_document(
+            db,
+            project,
+            user,
+            ingestion_status=IngestionStatus.SCAN_FAILED,
+            scan_attempt_count=3,
+        )
+
+        run_scan_calls: list = []
+        monkeypatch.setattr(
+            malware_scan, "run_scan", lambda *a, **kw: run_scan_calls.append(True)
+        )
+        retry_calls: list = []
+        monkeypatch.setattr(
+            "app.core.queue.enqueue_scan_retry",
+            lambda *a, **kw: retry_calls.append((a, kw)),
+        )
+
+        malware_scan.run_scan_sync(doc.id)
+
+        assert run_scan_calls == []
+        assert retry_calls == []
+        db.refresh(doc)
+        assert doc.ingestion_status == IngestionStatus.SCAN_FAILED
+        assert doc.scan_attempt_count == 3
+
+    def test_scan_document_task_does_not_call_run_scan_when_exhausted(
+        self, db, org_project_user, monkeypatch
+    ) -> None:
+        _org, project, user = org_project_user
+        monkeypatch.setattr(settings, "SCAN_MAX_ATTEMPTS", 3)
+        doc = _make_document(
+            db,
+            project,
+            user,
+            ingestion_status=IngestionStatus.SCAN_FAILED,
+            scan_attempt_count=3,
+        )
+
+        run_scan_calls: list = []
+        monkeypatch.setattr(
+            worker_mod, "run_scan", lambda *a, **kw: run_scan_calls.append(True)
+        )
+
+        asyncio.run(worker_mod.scan_document_task(None, str(doc.id)))
+
+        assert run_scan_calls == []
+        db.refresh(doc)
+        assert doc.ingestion_status == IngestionStatus.SCAN_FAILED
+        assert doc.scan_attempt_count == 3
+
+    def test_still_rearms_when_attempts_remain_below_cap(
+        self, db, org_project_user, monkeypatch
+    ) -> None:
+        """Sanity check alongside the exhaustion guard above: a document
+        one attempt short of the cap is still eligible and IS re-armed."""
+        _org, project, user = org_project_user
+        monkeypatch.setattr(settings, "SCAN_MAX_ATTEMPTS", 3)
+        doc = _make_document(
+            db,
+            project,
+            user,
+            ingestion_status=IngestionStatus.SCAN_FAILED,
+            scan_attempt_count=2,
+        )
+
+        org_id = malware_scan.prepare_scan_attempt(db, doc.id)
+
+        assert org_id is not None
+        db.refresh(doc)
+        assert doc.ingestion_status == IngestionStatus.SCANNING
+
+
+class TestPrepareScanAttemptRowLock:
+    """Regression coverage for review finding 2: the re-arm read-modify-
+    write must go through the same row lock run_scan itself uses
+    internally (_lock_document's PostgreSQL-only `.with_for_update()`),
+    not an unlocked db.get(), to avoid two racing callers each
+    successfully committing a duplicate SCAN_FAILED -> SCANNING
+    transition/AuditEvent."""
+
+    def test_acquires_for_update_lock_on_postgresql_dialect(
+        self, db, org_project_user, monkeypatch
+    ) -> None:
+        _org, project, user = org_project_user
+        doc = _make_document(
+            db, project, user, ingestion_status=IngestionStatus.SCAN_FAILED
+        )
+
+        # SQLite (the test engine) has no real row-level FOR UPDATE
+        # semantics; force the PostgreSQL-only locking branch, matching
+        # the pattern used by test_a5b_quarantine_upload.py's
+        # TestRfpUploadRowLock, so the lock statement can still be
+        # inspected even though the test DB is SQLite.
+        assert db.bind is not None
+        monkeypatch.setattr(db.bind.dialect, "name", "postgresql")
+
+        executed_statements: list = []
+        original_execute = db.execute
+
+        def _spy_execute(statement, *args, **kwargs):
+            executed_statements.append(statement)
+            return original_execute(statement, *args, **kwargs)
+
+        monkeypatch.setattr(db, "execute", _spy_execute)
+
+        malware_scan.prepare_scan_attempt(db, doc.id)
+
+        lock_statements = [
+            s
+            for s in executed_statements
+            if "FOR UPDATE" in str(s) and Document.__tablename__ in str(s)
+        ]
+        assert lock_statements, (
+            "expected a SELECT ... FOR UPDATE against the documents table "
+            "before the SCAN_FAILED -> SCANNING re-arm"
+        )

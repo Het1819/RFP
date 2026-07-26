@@ -9,9 +9,8 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.models.document import Document
 from app.models.job import ProcessingJob
-from app.models.project import ProposalProject
-from app.services.ingestion_state import IngestionStatus, transition
-from app.services.malware_scan import run_scan
+from app.services.ingestion_state import IngestionStatus
+from app.services.malware_scan import prepare_scan_attempt, run_scan
 from app.services.project_service import process_job_pipeline_async
 
 
@@ -48,36 +47,30 @@ async def scan_document_task(ctx: Any, document_id_str: str) -> None:
     inside `run_scan` are both blocking/synchronous, so the call is
     wrapped in `asyncio.to_thread(...)` to avoid blocking the arq event
     loop for the duration of a scan.
+
+    Document-locking, org_id resolution, and any SCAN_FAILED -> SCANNING
+    re-arming (for a task run that is itself a bounded retry) are
+    delegated to `malware_scan.prepare_scan_attempt`, shared with
+    `run_scan_sync` so both entry points get identical locking and
+    attempt-cap bounding -- see that function's docstring for why both
+    the row lock and the attempt-cap re-check matter under arq's
+    at-least-once delivery.
     """
     from app.core.database import SessionLocal as _SessionLocal
 
     document_id = uuid.UUID(document_id_str)
     db = _SessionLocal()
     try:
-        document = db.get(Document, document_id)
-        if document is None:
-            return  # deleted/invalid -- nothing to scan, not an error
-        project = db.get(ProposalProject, document.project_id)
-        if project is None:
+        org_id = prepare_scan_attempt(db, document_id)
+        if org_id is None:
             return
-        org_id = project.organization_id
-
-        # Re-arm SCAN_FAILED -> SCANNING when this task run is itself a
-        # bounded retry: run_scan's own idempotency guard only proceeds
-        # when the document is SCANNING.
-        if document.ingestion_status == IngestionStatus.SCAN_FAILED:
-            transition(
-                db,
-                document,
-                IngestionStatus.SCANNING,
-                org_id=org_id,
-                user_id=document.created_by_id,
-            )
 
         await asyncio.to_thread(run_scan, db, document_id, org_id=org_id)
 
+        document = db.get(Document, document_id)
         if (
-            document.ingestion_status == IngestionStatus.SCAN_FAILED
+            document is not None
+            and document.ingestion_status == IngestionStatus.SCAN_FAILED
             and document.scan_attempt_count < settings.SCAN_MAX_ATTEMPTS
         ):
             from app.core.queue import enqueue_scan_retry
