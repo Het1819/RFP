@@ -32,6 +32,15 @@ logger = logging.getLogger(__name__)
 # so callers/audit logs can tell which policy version produced a result.
 POLICY_VERSION = "1"
 
+# Repo root (three levels up from this file: app/services/<this file>).
+# Passed as the subprocess's cwd below so `-m app.services.
+# pdf_inspector_subprocess` resolves correctly regardless of this
+# process's own current working directory -- currently correct by
+# relying on cwd implicitly (no PYTHONPATH is passed to the minimal
+# subprocess environment), but fragile if the parent process's cwd ever
+# changes. An explicit cwd= removes that assumption entirely.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
 _FAILED_REASON = "PDF_INSPECTION_FAILED"
 
 
@@ -128,6 +137,7 @@ def check_pdf_content_policy(file_path: Path) -> PdfPolicyResult:
             text=True,
             errors="replace",
             env=_minimal_subprocess_env(),
+            cwd=_REPO_ROOT,
         )
     except subprocess.TimeoutExpired:
         # subprocess.run's `timeout` kills the child (and any pipe

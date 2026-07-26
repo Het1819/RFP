@@ -62,7 +62,38 @@ _ERROR_SUFFIX = " ERROR"
 _STREAM_PREFIX = "stream: "
 
 # "ClamAV 1.4.5/28058/Sun Jul 12 06:25:26 2026"
-_VERSION_TIMESTAMP_FORMAT = "%a %b %d %H:%M:%S %Y"
+#
+# Parsed with an explicit, locale-independent month-name table below
+# rather than strptime's "%b" -- strptime's day/month names are bound to
+# the process's LC_TIME locale, so under a non-English locale "%b" would
+# silently fail to match clamd's always-English VERSION output. A failed
+# parse makes _is_signature_stale() return True (fail closed: every scan
+# fails closed as stale-signature), which is safe but is a total-
+# scanning-outage footgun tied to an environment variable that has
+# nothing to do with scanning.
+_MONTH_ABBREVIATIONS = {
+    "Jan": 1,
+    "Feb": 2,
+    "Mar": 3,
+    "Apr": 4,
+    "May": 5,
+    "Jun": 6,
+    "Jul": 7,
+    "Aug": 8,
+    "Sep": 9,
+    "Oct": 10,
+    "Nov": 11,
+    "Dec": 12,
+}
+# "Sun Jul 12 06:25:26 2026" -- weekday name is not used, only validated
+# as present (three letters) for shape/sanity.
+_VERSION_TIMESTAMP_RE = re.compile(
+    r"^(?P<weekday>[A-Za-z]{3})\s+"
+    r"(?P<month>[A-Za-z]{3})\s+"
+    r"(?P<day>\d{1,2})\s+"
+    r"(?P<hour>\d{1,2}):(?P<minute>\d{2}):(?P<second>\d{2})\s+"
+    r"(?P<year>\d{4})$"
+)
 
 
 class ScanOutcome(str, Enum):  # noqa: UP042 -- str mixin required for JSON/API contract
@@ -265,7 +296,15 @@ def check_connectivity() -> bool:
         return False
 
     try:
-        sock.settimeout(settings.CLAMAV_IO_TIMEOUT_SECONDS)
+        # Bounded by CLAMAV_CONNECT_TIMEOUT_SECONDS, not the longer
+        # CLAMAV_IO_TIMEOUT_SECONDS used for actual scan streaming -- this
+        # is a readiness probe, not a scan, and must fail fast on a
+        # wedged/overloaded daemon that accepts the TCP connection but
+        # never responds. Keeping this bounded by the same timeout as the
+        # initial connect (rather than the much longer I/O timeout) is
+        # what readiness.py's docstring, RUNBOOK.md, and DEPLOYMENT.md all
+        # document this probe as doing.
+        sock.settimeout(settings.CLAMAV_CONNECT_TIMEOUT_SECONDS)
         sock.sendall(_PING_COMMAND)
         raw = _read_until(sock, b"\0")
     except (TimeoutError, OSError):
@@ -283,6 +322,33 @@ def check_connectivity() -> bool:
 _VERSION_LINE_RE = re.compile(r"^(?P<engine>.+?)/(?P<sig>[^/]+)/(?P<timestamp>.+)$")
 
 
+def _parse_version_timestamp(timestamp_str: str) -> datetime | None:
+    """Parse clamd's VERSION timestamp (e.g. "Sun Jul 12 06:25:26 2026")
+    using an explicit month-name table instead of strptime's locale-bound
+    "%b", so this never silently breaks under a non-English LC_TIME.
+    Returns None (caller treats this as fail-closed staleness) on any
+    unparseable shape or unrecognized month abbreviation."""
+    match = _VERSION_TIMESTAMP_RE.match(timestamp_str.strip())
+    if not match:
+        return None
+    month = _MONTH_ABBREVIATIONS.get(match.group("month"))
+    if month is None:
+        return None
+    try:
+        return datetime(
+            year=int(match.group("year")),
+            month=month,
+            day=int(match.group("day")),
+            hour=int(match.group("hour")),
+            minute=int(match.group("minute")),
+            second=int(match.group("second")),
+            tzinfo=UTC,
+        )
+    except ValueError:
+        # Out-of-range day/hour/etc (e.g. Feb 30) -- fail closed.
+        return None
+
+
 def _parse_version_line(raw: str) -> VersionInfo | None:
     match = _VERSION_LINE_RE.match(raw)
     if not match:
@@ -297,12 +363,7 @@ def _parse_version_line(raw: str) -> VersionInfo | None:
         engine_tokens[1].strip() if len(engine_tokens) == 2 else engine_part or None
     )
 
-    signature_timestamp: datetime | None
-    try:
-        parsed = datetime.strptime(timestamp_str, _VERSION_TIMESTAMP_FORMAT)
-        signature_timestamp = parsed.replace(tzinfo=UTC)
-    except ValueError:
-        signature_timestamp = None
+    signature_timestamp = _parse_version_timestamp(timestamp_str)
 
     return VersionInfo(
         raw=raw,

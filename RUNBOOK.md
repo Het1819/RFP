@@ -305,6 +305,29 @@ a real operator concern once it has exhausted its attempts.
    normal application path (re-upload, or a supported retry action if one
    is exposed in the UI/job-retry route) — not a direct database edit.
 
+**Known limitation — enqueue-failure recovery is best-effort.**
+`app.core.queue.enqueue_scan_job`'s `QUEUE_ENABLED=True` fire-and-forget
+Redis enqueue now logs any failure and attempts to transition the
+document straight to `SCAN_FAILED` / `SCAN_ENQUEUE_FAILED` (re-entering
+the normal bounded-retry path) instead of silently stranding it. That
+recovery path opens its own short-lived DB session and is itself
+best-effort: if the database is *also* unavailable at that exact moment,
+the document can still be left in `SCANNING` with `scan_attempt_count`
+still `0` and no scan ever attempted — there is no reaper for stale
+`SCANNING` rows in this phase. If a document appears stuck this way, look
+for the corresponding `enqueue_scan_job: failed to enqueue scan for
+document <id>` (and, if the recovery path also failed,
+`enqueue_scan_job: recovery path itself failed for document <id>`)
+warning/error lines in `app` logs around the upload time, and query for
+documents with `ingestion_status = 'SCANNING'`,
+`quarantined_at` older than a few minutes, and `scan_attempt_count = 0` —
+those are enqueue-failure candidates, not documents actively being
+scanned. The equivalent retry-side path
+(`app.core.queue.enqueue_scan_retry`'s fire-and-forget enqueue) only logs
+on failure rather than attempting a transition, since a document reaching
+that path already has an existing `SCAN_FAILED` audit trail from the
+attempt that led there.
+
 ### 5.2 Checking `clamd` health
 ```bash
 # Container-level health (Docker's own healthcheck, using clamd's bundled script)

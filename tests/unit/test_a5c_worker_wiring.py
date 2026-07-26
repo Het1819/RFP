@@ -17,6 +17,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import app.core.queue as queue_mod
 import app.worker as worker_mod
 from app.core.config import settings
 from app.core.queue import enqueue_scan_job, enqueue_scan_retry
@@ -132,6 +133,68 @@ class TestEnqueueScanJobQueueDisabled:
         assert doc.ingestion_status == IngestionStatus.CLEAN_PENDING_PROMOTION
         jobs = db.query(ProcessingJob).all()
         assert jobs == []
+
+
+class TestEnqueueScanJobEnqueueFailureRecovery:
+    """Regression coverage for review finding 5: a failed fire-and-forget
+    Redis enqueue in enqueue_scan_job must never silently strand a
+    document in SCANNING with zero scan attempts and zero audit trail --
+    it must be logged, and the document must be transitioned into
+    SCAN_FAILED so it re-enters the normal bounded-retry machinery."""
+
+    def test_enqueue_failure_transitions_document_to_scan_failed(
+        self, db, org_project_user, monkeypatch
+    ) -> None:
+        _org, project, user = org_project_user
+        monkeypatch.setattr(settings, "QUEUE_ENABLED", True)
+        monkeypatch.setattr(settings, "SCAN_MAX_ATTEMPTS", 3)
+        doc = _make_document(db, project, user, scan_attempt_count=0)
+
+        async def _boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("redis unavailable")
+
+        monkeypatch.setattr(queue_mod, "_enqueue_scan_to_redis", _boom)
+
+        retry_calls: list = []
+        monkeypatch.setattr(
+            queue_mod,
+            "enqueue_scan_retry",
+            lambda document_id, *, attempt: retry_calls.append((document_id, attempt)),
+        )
+
+        # No running event loop in this synchronous test, so
+        # enqueue_scan_job takes the asyncio.run(...) fallback branch,
+        # which raises synchronously and is caught in-line -- avoids
+        # needing to await a background task's done-callback here.
+        enqueue_scan_job(doc.id)
+
+        db.refresh(doc)
+        assert doc.ingestion_status == IngestionStatus.SCAN_FAILED
+        assert doc.rejection_reason_code == "SCAN_ENQUEUE_FAILED"
+        assert doc.scan_attempt_count == 1
+        assert retry_calls == [(doc.id, 2)]
+
+    def test_recovery_is_noop_if_document_no_longer_scanning(
+        self, db, org_project_user, monkeypatch
+    ) -> None:
+        """If something else already moved the document out of SCANNING
+        by the time the recovery path runs, it must not clobber that
+        outcome."""
+        _org, project, user = org_project_user
+        monkeypatch.setattr(settings, "QUEUE_ENABLED", True)
+        doc = _make_document(
+            db, project, user, ingestion_status=IngestionStatus.CLEAN_PENDING_PROMOTION
+        )
+
+        async def _boom(*args: object, **kwargs: object) -> None:
+            raise RuntimeError("redis unavailable")
+
+        monkeypatch.setattr(queue_mod, "_enqueue_scan_to_redis", _boom)
+
+        enqueue_scan_job(doc.id)
+
+        db.refresh(doc)
+        assert doc.ingestion_status == IngestionStatus.CLEAN_PENDING_PROMOTION
 
 
 class TestEnqueueScanRetryBackoff:
@@ -364,6 +427,71 @@ class TestPrepareScanAttemptExhaustionGuard:
         assert org_id is not None
         db.refresh(doc)
         assert doc.ingestion_status == IngestionStatus.SCANNING
+
+
+class TestPermanentDigestDriftBoundedRetry:
+    """Regression coverage for the critical review finding: the
+    digest-drift guard in run_scan must still increment
+    scan_attempt_count, or a permanently-drifted document (missing/
+    corrupted quarantine file, a resolve_quarantine_path failure, etc.)
+    would never advance its attempt count and would be retried forever
+    -- a hot loop in queue mode, or a RecursionError here in
+    QUEUE_ENABLED=False sync mode, since enqueue_scan_retry calls back
+    into run_scan_sync inline."""
+
+    def test_permanently_drifted_document_exhausts_and_stops_retrying(
+        self, db, org_project_user, monkeypatch
+    ) -> None:
+        _org, project, user = org_project_user
+        monkeypatch.setattr(settings, "QUEUE_ENABLED", False)
+        monkeypatch.setattr(settings, "SCAN_MAX_ATTEMPTS", 3)
+        doc = _make_document(db, project, user, scan_attempt_count=0)
+
+        # The drift condition remains true across every retry attempt --
+        # e.g. the quarantine file is permanently missing/corrupted.
+        monkeypatch.setattr(
+            malware_scan,
+            "_resolve_and_verify_quarantine_path",
+            lambda document: None,
+        )
+
+        redis_calls: list = []
+        monkeypatch.setattr(
+            "app.core.queue._enqueue_scan_to_redis",
+            lambda *a, **kw: redis_calls.append((a, kw)),
+        )
+
+        # Before the fix, this call would recurse into itself without
+        # bound (enqueue_scan_retry -> run_scan_sync -> ... ), eventually
+        # raising RecursionError, because scan_attempt_count never
+        # advanced past 0. With the fix, recursion is bounded by
+        # SCAN_MAX_ATTEMPTS and terminates cleanly.
+        malware_scan.run_scan_sync(doc.id)
+
+        db.refresh(doc)
+        assert doc.ingestion_status == IngestionStatus.SCAN_FAILED
+        assert doc.rejection_reason_code == "QUARANTINE_INTEGRITY_MISMATCH"
+        assert doc.scan_attempt_count == 3
+        assert redis_calls == []
+
+        # Three rapid SCAN_FAILED transitions happen back-to-back in this
+        # test with no real delay between them, so their created_at
+        # values can tie at whatever resolution datetime.now() has on
+        # this platform -- "order by created_at desc, pick first" is not
+        # a reliable way to find the exhausting attempt's event. Instead,
+        # assert directly that exactly one matching event carries the
+        # exhaustion marker, and that it is the one with
+        # scan_attempt_count == 3 (the final attempt).
+        from app.models.audit import AuditEvent
+
+        events = (
+            db.query(AuditEvent)
+            .filter_by(entity_id=doc.id, action="document_ingestion_transition")
+            .all()
+        )
+        exhausted_events = [e for e in events if e.details.get("scan_exhausted")]
+        assert len(exhausted_events) == 1
+        assert exhausted_events[0].details["scan_attempt_count"] == 3
 
 
 class TestPrepareScanAttemptRowLock:

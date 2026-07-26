@@ -270,10 +270,31 @@ app's own Docker healthcheck reaches them directly over the private
   ```bash
   docker compose -f docker-compose.prod.yml exec app curl -f http://127.0.0.1:8000/healthz
   ```
-- **`/readyz`**: Returns `200` only when **both** current required dependencies are healthy: PostgreSQL connectivity, and a real save/get/delete round-trip against the authenticated Redis session store. Returns `503` if either is unreachable.
+- **`/readyz`**: Returns `200` only when all current required dependencies are healthy: PostgreSQL connectivity, a real save/get/delete round-trip against the authenticated Redis session store, quarantine storage writability, and (Phase A5c) `clamd` connectivity (see `app.core.readiness.check_clamav_connectivity`). Returns `503` if any is unreachable.
   ```bash
   docker compose -f docker-compose.prod.yml exec app curl -f http://127.0.0.1:8000/readyz
   ```
+  **Deliberate tradeoff, not an accident:** `app` itself never talks to `clamd`
+  directly (only `worker` does — `app` only writes files to quarantine
+  storage and enqueues a scan job), yet `/readyz` still gates on `clamd`
+  connectivity, and `app`'s Docker healthcheck (which nginx's own
+  `depends_on: app: condition: service_healthy` chains off of) is exactly
+  that `/readyz`. This means a `clamd` outage marks `app` (and therefore
+  the whole public edge, via nginx) unhealthy, even though only background
+  scanning is actually affected — features that don't touch document
+  upload/scanning would otherwise stay available. This phase keeps the
+  coupling anyway: `app`'s readiness is interpreted as "can this instance
+  safely accept new uploads that need scanning," and a scanner outage
+  means new uploads cannot be safely accepted (they would sit stuck in
+  `SCANNING` behind a scanner that isn't reachable). `app`'s
+  `depends_on:` in `docker-compose.prod.yml` includes
+  `clamd: condition: service_healthy` so at least *startup ordering* is
+  correct (nginx won't flip healthy before `clamd`'s up-to-90s first-run
+  signature download completes) — but a *later* `clamd` outage will still
+  take down `/readyz`, `app`'s healthcheck, and therefore nginx's
+  dependency-gated availability. Splitting `/readyz` into scanner-specific
+  and non-scanner-specific probes is a reasonable follow-up but is out of
+  scope for this phase.
 
 For a lightweight edge-level check (no dependency details), use Nginx's
 own loopback-restricted health path:
@@ -568,6 +589,15 @@ Scan attempts are bounded, not infinite and not silently dropped:
   same delay value but does not actually wait on it before running the
   next attempt inline — a deliberate, documented simplification for
   dev/test only.
+- **Dev-mode note:** with `QUEUE_ENABLED=False`, the entire scan (including
+  any bounded retries) runs synchronously, inline, inside the upload HTTP
+  request handler — there is no background worker involved. If `clamd` is
+  unreachable in this mode, the request can block for up to roughly
+  `SCAN_MAX_ATTEMPTS` × `CLAMAV_CONNECT_TIMEOUT_SECONDS` (default: up to
+  ~15s with 3 attempts at the 5s default) before the upload response
+  returns, since each failed attempt's connect timeout is incurred
+  synchronously before the next retry runs. This is expected and fine for
+  local dev/CI; it is not how the queue-enabled production path behaves.
 - Exhaustion is always operator-visible: every `SCAN_FAILED` transition
   writes a structured `AuditEvent` (action `document_ingestion_transition`)
   including `scan_attempt_count`, and the final exhausting attempt adds

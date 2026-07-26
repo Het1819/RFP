@@ -100,6 +100,84 @@ async def _enqueue_scan_to_redis(
     await redis.close()
 
 
+_ENQUEUE_FAILED_REASON = "SCAN_ENQUEUE_FAILED"
+
+
+def _handle_scan_enqueue_failure(document_id: uuid.UUID, exc: BaseException) -> None:
+    """Recovery path for a failed fire-and-forget scan enqueue.
+
+    If Redis is briefly unavailable when `enqueue_scan_job` fires, the
+    document would otherwise be silently stranded in `SCANNING` forever:
+    the upload HTTP response already returned 200, no scan attempt was
+    ever recorded, and there is no reaper for stale SCANNING rows in this
+    phase. Always logs the failure (never silently swallowed); then, on a
+    best-effort basis, transitions the document to `SCAN_FAILED` so it
+    re-enters the existing bounded-retry machinery
+    (`scan_attempt_count`/`SCAN_MAX_ATTEMPTS`) instead of being lost.
+    Only touches the document if it is still `SCANNING` -- if something
+    else already handled it, this is a no-op.
+    """
+    logger.error(
+        "enqueue_scan_job: failed to enqueue scan for document %s (%s)",
+        document_id,
+        type(exc).__name__,
+    )
+    try:
+        from app.core.database import SessionLocal
+        from app.models.document import Document
+        from app.models.project import ProposalProject
+        from app.services.ingestion_state import IngestionStatus, transition
+
+        db = SessionLocal()
+        try:
+            document = db.get(Document, document_id)
+            if (
+                document is None
+                or document.ingestion_status != IngestionStatus.SCANNING
+            ):
+                return
+            project = db.get(ProposalProject, document.project_id)
+            if project is None:
+                return
+            document.scan_attempt_count += 1
+            document.scan_status = _ENQUEUE_FAILED_REASON
+            transition(
+                db,
+                document,
+                IngestionStatus.SCAN_FAILED,
+                org_id=project.organization_id,
+                user_id=document.created_by_id,
+                reason_code=_ENQUEUE_FAILED_REASON,
+                safe_summary=(
+                    "The document could not be scanned. It will be "
+                    "automatically retried or an operator will review it."
+                ),
+                audit_detail={"scan_attempt_count": document.scan_attempt_count},
+            )
+            if document.scan_attempt_count < settings.SCAN_MAX_ATTEMPTS:
+                enqueue_scan_retry(document_id, attempt=document.scan_attempt_count + 1)
+        finally:
+            db.close()
+    except Exception:
+        # This is already the failure-recovery path -- if it too fails
+        # (e.g. the database is also unavailable), the document stays in
+        # SCANNING, but the original failure above is still logged, so
+        # this is not a silent loss.
+        logger.exception(
+            "enqueue_scan_job: recovery path itself failed for document %s",
+            document_id,
+        )
+
+
+def _on_scan_enqueue_task_done(document_id: uuid.UUID, task: asyncio.Task[Any]) -> None:
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _handle_scan_enqueue_failure(document_id, exc)
+
+
 def enqueue_scan_job(document_id: uuid.UUID) -> None:
     """Enqueue one malware/content-policy scan attempt for `document_id`.
 
@@ -118,10 +196,13 @@ def enqueue_scan_job(document_id: uuid.UUID) -> None:
         loop = asyncio.get_running_loop()
         task = loop.create_task(_enqueue_scan_to_redis(document_id))
         _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
+        task.add_done_callback(lambda t: _on_scan_enqueue_task_done(document_id, t))
     except RuntimeError:
         # No running loop, run using asyncio.run
-        asyncio.run(_enqueue_scan_to_redis(document_id))
+        try:
+            asyncio.run(_enqueue_scan_to_redis(document_id))
+        except Exception as exc:
+            _handle_scan_enqueue_failure(document_id, exc)
 
 
 def enqueue_scan_retry(document_id: uuid.UUID, *, attempt: int) -> None:
@@ -154,6 +235,31 @@ def enqueue_scan_retry(document_id: uuid.UUID, *, attempt: int) -> None:
         loop = asyncio.get_running_loop()
         task = loop.create_task(_enqueue_scan_to_redis(document_id, defer_by=jittered))
         _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
+
+        def _on_retry_enqueue_done(t: asyncio.Task[Any]) -> None:
+            _background_tasks.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                # This document is already SCAN_FAILED with an existing
+                # audit trail from the attempt that led here (unlike
+                # enqueue_scan_job's initial-enqueue failure, which starts
+                # from a document with zero attempts and zero audit
+                # history) -- so a full transition-on-failure recovery
+                # isn't attempted here. At minimum, this must never be
+                # silently swallowed: it means a scheduled retry never
+                # actually got enqueued, so the document will sit in
+                # SCAN_FAILED with attempts remaining until an operator
+                # notices via this log line. See RUNBOOK.md 5.1.
+                logger.error(
+                    "enqueue_scan_retry: failed to enqueue retry for "
+                    "document %s attempt %d (%s)",
+                    document_id,
+                    attempt,
+                    type(exc).__name__,
+                )
+
+        task.add_done_callback(_on_retry_enqueue_done)
     except RuntimeError:
         asyncio.run(_enqueue_scan_to_redis(document_id, defer_by=jittered))

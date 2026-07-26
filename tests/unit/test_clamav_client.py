@@ -326,6 +326,44 @@ class TestCheckConnectivity:
         monkeypatch.setattr(settings, "CLAMAV_CONNECT_TIMEOUT_SECONDS", 10.0)
         assert check_connectivity() is False
 
+    def test_wedged_daemon_times_out_by_connect_timeout_not_io_timeout(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression test for review finding 4: the PING read in
+        check_connectivity() must be bounded by
+        CLAMAV_CONNECT_TIMEOUT_SECONDS (documented in readiness.py's
+        docstring, RUNBOOK.md 5.3, and DEPLOYMENT.md as the readiness
+        probe's bound), not the much longer CLAMAV_IO_TIMEOUT_SECONDS
+        used for real scan streaming. A daemon that accepts the TCP
+        connection but never responds to PING -- exactly the wedged/
+        overloaded scenario a readiness probe exists to catch -- must
+        fail fast on the short timeout, not hang for the long one."""
+        monkeypatch.setattr(settings, "CLAMAV_CONNECT_TIMEOUT_SECONDS", 0.3)
+        monkeypatch.setattr(settings, "CLAMAV_IO_TIMEOUT_SECONDS", 30.0)
+
+        def handler(conn: socket.socket) -> None:
+            assert _recv_exact(conn, len(b"zPING\0")) == b"zPING\0"
+            # Never respond -- if the PING read were bounded by the long
+            # CLAMAV_IO_TIMEOUT_SECONDS instead of the short
+            # CLAMAV_CONNECT_TIMEOUT_SECONDS, this test would hang for
+            # ~30s instead of returning quickly.
+            time.sleep(5)
+
+        server = _ScriptedServer(handler).start()
+        _use_server(monkeypatch, server)
+        started = time.monotonic()
+        try:
+            result = check_connectivity()
+        finally:
+            server.stop()
+        elapsed = time.monotonic() - started
+
+        assert result is False
+        assert elapsed < 5.0, (
+            f"check_connectivity took {elapsed:.1f}s -- PING read is not "
+            "bounded by CLAMAV_CONNECT_TIMEOUT_SECONDS"
+        )
+
 
 class TestGetVersionInfo:
     def test_well_formed_version_string_parsed(
@@ -382,3 +420,39 @@ class TestGetVersionInfo:
 
     def test_parse_version_line_no_separators_returns_none(self) -> None:
         assert _parse_version_line("garbage") is None
+
+    def test_parse_version_line_all_months_parse_without_locale_dependence(
+        self,
+    ) -> None:
+        """Regression test for review finding 7: month parsing must not
+        rely on strptime's locale-bound "%b" -- verify every month
+        abbreviation clamd could emit parses correctly regardless of the
+        process's locale (this test itself never touches locale.setlocale,
+        which is exactly the point: the explicit month table means there
+        is nothing locale-sensitive to set up)."""
+        months = [
+            ("Jan", 1),
+            ("Feb", 2),
+            ("Mar", 3),
+            ("Apr", 4),
+            ("May", 5),
+            ("Jun", 6),
+            ("Jul", 7),
+            ("Aug", 8),
+            ("Sep", 9),
+            ("Oct", 10),
+            ("Nov", 11),
+            ("Dec", 12),
+        ]
+        for abbrev, month_number in months:
+            parsed = _parse_version_line(
+                f"ClamAV 1.4.5/28058/Sun {abbrev} 12 06:25:26 2026"
+            )
+            assert parsed is not None
+            assert parsed.signature_timestamp is not None
+            assert parsed.signature_timestamp.month == month_number
+
+    def test_parse_version_line_unrecognized_month_fails_closed(self) -> None:
+        parsed = _parse_version_line("ClamAV 1.4.5/28058/Sun Xyz 12 06:25:26 2026")
+        assert parsed is not None
+        assert parsed.signature_timestamp is None
