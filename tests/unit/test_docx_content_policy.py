@@ -126,9 +126,7 @@ class TestCheckDocxContentPolicy:
     def test_embedded_ole_object_fails(self, tmp_path: Path) -> None:
         path = _build_minimal_docx(
             tmp_path,
-            extra_members={
-                "word/embeddings/oleObject1.bin": _OLE_MAGIC + b"\x00" * 32
-            },
+            extra_members={"word/embeddings/oleObject1.bin": _OLE_MAGIC + b"\x00" * 32},
         )
         result = check_docx_content_policy(path)
         assert result.passed is False
@@ -183,9 +181,7 @@ class TestCheckDocxContentPolicy:
         )
         path = _build_minimal_docx(
             tmp_path,
-            extra_members={
-                "word/_rels/document.xml.rels": single_quoted_rels.encode()
-            },
+            extra_members={"word/_rels/document.xml.rels": single_quoted_rels.encode()},
         )
         result = check_docx_content_policy(path)
         assert result.passed is False

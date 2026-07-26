@@ -207,14 +207,10 @@ class TestCleanPdfFullLifecycle:
             assert str(tmp_path) not in serialized
 
 
-_DOCX_MIME = (
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-)
+_DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
 
-def _assert_eicar_lifecycle_terminated_safely(
-    db, doc, tmp_path, filename: str
-) -> None:
+def _assert_eicar_lifecycle_terminated_safely(db, doc, tmp_path, filename: str) -> None:
     """Shared assertions for the EICAR full-lifecycle tests, regardless of
     upload container format (DOCX or PDF): every scan-metadata column is
     populated as expected for a malware verdict, the rejection is
@@ -284,9 +280,7 @@ class TestEicarFullLifecycle:
                 upload=upload,
                 doc_role="rfp",
             )
-            _assert_eicar_lifecycle_terminated_safely(
-                db, doc, tmp_path, "eicar.docx"
-            )
+            _assert_eicar_lifecycle_terminated_safely(db, doc, tmp_path, "eicar.docx")
         finally:
             # No orphaned EICAR artifact should remain on disk beyond this
             # test even though tmp_path itself is auto-cleaned by pytest.
