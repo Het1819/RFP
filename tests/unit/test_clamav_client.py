@@ -242,6 +242,36 @@ class TestScanStreamTimeout:
         assert result.outcome == ScanOutcome.TIMEOUT
 
 
+class TestScanStreamWriteTimeout:
+    def test_write_timeout_during_chunk_send_returns_timeout(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # Regression test: a stall while *sending* a chunk (clamd's
+        # receive buffer stops draining) must be categorized as TIMEOUT,
+        # not misread as a local file-read failure (UNAVAILABLE) just
+        # because TimeoutError is a subclass of OSError.
+        monkeypatch.setattr(settings, "CLAMAV_IO_TIMEOUT_SECONDS", 1.0)
+
+        def handler(conn: socket.socket) -> None:
+            assert _read_instream_command(conn) == b"zINSTREAM\0"
+            # Never read the chunk data that follows -- once the kernel
+            # send/receive buffers fill (empirically well under 1 MiB on
+            # loopback), the client's blocking sendall() for a later
+            # chunk must time out.
+            time.sleep(5)
+
+        server = _ScriptedServer(handler).start()
+        _use_server(monkeypatch, server)
+        try:
+            target = tmp_path / "large.bin"
+            target.write_bytes(b"x" * (2 * 1024 * 1024))  # 2 MiB
+            result = scan_stream(target)
+        finally:
+            server.stop()
+
+        assert result.outcome == ScanOutcome.TIMEOUT
+
+
 class TestScanStreamSizeLimit:
     def test_oversized_file_rejected_without_exceeding_max_bytes_on_wire(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

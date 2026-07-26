@@ -156,29 +156,50 @@ def scan_stream(file_path: Path, *, max_bytes: int | None = None) -> ScanResult:
         return _empty_result(ScanOutcome.UNAVAILABLE)
 
     try:
-        sock.settimeout(settings.CLAMAV_IO_TIMEOUT_SECONDS)
         try:
+            sock.settimeout(settings.CLAMAV_IO_TIMEOUT_SECONDS)
             sock.sendall(_INSTREAM_COMMAND)
 
             total = 0
             exceeded = False
+            # Local file I/O errors (open/read) are handled in their own
+            # narrow except block, deliberately kept separate from the
+            # socket-write except below: TimeoutError is a subclass of
+            # OSError, so sharing one `except OSError` between file reads
+            # and `sock.sendall()` would silently swallow a genuine
+            # clamd-side write timeout as a (misleadingly-logged) local
+            # file failure instead of a TIMEOUT.
             try:
-                with open(file_path, "rb") as handle:
-                    while True:
-                        chunk = handle.read(chunk_size)
-                        if not chunk:
-                            break
-                        total += len(chunk)
-                        if total > limit:
-                            exceeded = True
-                            break
-                        sock.sendall(struct.pack(">I", len(chunk)) + chunk)
+                handle = open(file_path, "rb")
             except OSError:
                 logger.warning(
-                    "clamav scan_stream local file read failed: %s",
+                    "clamav scan_stream local file open failed: %s",
                     ScanOutcome.UNAVAILABLE.value,
                 )
                 return _empty_result(ScanOutcome.UNAVAILABLE)
+
+            with handle:
+                while True:
+                    try:
+                        chunk = handle.read(chunk_size)
+                    except OSError:
+                        logger.warning(
+                            "clamav scan_stream local file read failed: %s",
+                            ScanOutcome.UNAVAILABLE.value,
+                        )
+                        return _empty_result(ScanOutcome.UNAVAILABLE)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > limit:
+                        exceeded = True
+                        break
+                    # Not wrapped here -- TimeoutError/OSError from this
+                    # sendall() propagates to the outer except clauses
+                    # below, which categorize socket failures correctly
+                    # (TIMEOUT vs UNAVAILABLE), the same as every other
+                    # socket call in this function.
+                    sock.sendall(struct.pack(">I", len(chunk)) + chunk)
 
             # Always send the terminator, whether the stream completed
             # normally or was aborted for exceeding the size limit -- this
