@@ -133,6 +133,21 @@ class Settings(BaseSettings):
     MAX_DISPLAY_FILENAME_LENGTH: int = 255
     DOCX_DETECTION_MAX_MEMBERS: int = 5000
 
+    # --- DOCX content-policy inspection (Phase A5c) ---
+    # Bounds for the zip-bomb defense in app.services.docx_content_policy.
+    # Both are read from ZIP central-directory metadata only (info.file_size
+    # / info.compress_size), never by decompressing member content.
+    # 200 MiB is generously above any realistic legitimate DOCX (typical
+    # proposal/knowledge documents with embedded images run low tens of MB
+    # uncompressed) while still bounding worst-case memory/CPU exposure from
+    # a maliciously crafted package.
+    DOCX_MAX_UNCOMPRESSED_TOTAL_BYTES: int = 200 * 1024 * 1024  # 200 MiB
+    # A 100:1 declared-uncompressed-to-compressed ratio is far beyond what
+    # ordinary XML/text/image content inside a DOCX achieves (typically
+    # single-digit to low double-digit ratios), so this catches classic
+    # zip-bomb-style entries without rejecting genuine documents.
+    DOCX_MAX_COMPRESSION_RATIO: int = 100
+
     # --- ClamAV malware scanning (Phase A5c) ---
     # clamd's own daemon-side StreamMaxLength is configured separately in
     # the clamd deployment; CLAMAV_STREAM_MAX_BYTES is this app's
