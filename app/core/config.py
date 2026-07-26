@@ -160,6 +160,20 @@ class Settings(BaseSettings):
     CLAMAV_IO_TIMEOUT_SECONDS: float = 30.0
     CLAMAV_STREAM_MAX_BYTES: int = 10 * 1024 * 1024  # must be <= MAX_UPLOAD_SIZE
     CLAMAV_MAX_SIGNATURE_AGE_HOURS: int = 48
+    # --- PDF content-policy inspection (Phase A5c) ---
+    # The inspector itself runs in an isolated OS subprocess (see
+    # app.services.pdf_inspector_subprocess) -- these settings bound both
+    # the parent's wall-clock wait for that subprocess and the resource
+    # limits the subprocess applies to itself before opening the
+    # untrusted file. 10s CPU / 512 MiB address space is generous for
+    # parsing PDF structural metadata (no rendering, no text extraction)
+    # while still bounding worst-case resource exposure from a
+    # maliciously crafted file. The wall-clock timeout is kept a little
+    # above the CPU limit to allow for process startup and I/O wait.
+    PDF_INSPECTION_TIMEOUT_SECONDS: float = 15.0
+    PDF_INSPECTOR_CPU_SECONDS: int = 10
+    PDF_INSPECTOR_MEMORY_BYTES: int = 512 * 1024 * 1024  # 512 MiB
+
     LLM_PROVIDER: str = "fake"
     ANTHROPIC_API_KEY: str = ""
     LLM_MODEL: str = ""
