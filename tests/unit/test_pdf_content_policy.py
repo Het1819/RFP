@@ -74,6 +74,42 @@ def _embedded_file_pdf(tmp_path: Path) -> Path:
     return _write(writer, tmp_path / "embedded.pdf")
 
 
+def _file_attachment_annotation_pdf(tmp_path: Path) -> Path:
+    """A page annotation of /Subtype /FileAttachment carrying an inline
+    /FS Filespec -- a distinct embedding path from add_attachment()'s
+    /Names/EmbeddedFiles tree."""
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    writer.add_annotation(
+        0,
+        {
+            "/Subtype": "/FileAttachment",
+            "/Rect": [0, 0, 10, 10],
+            "/FS": {"/Type": "/Filespec", "/F": "attached.exe"},
+        },
+    )
+    return _write(writer, tmp_path / "file_attachment_annotation.pdf")
+
+
+def _orphan_filespec_pdf(tmp_path: Path) -> Path:
+    """A /Type /Filespec object present in the file but not linked from
+    /Names/EmbeddedFiles or any page annotation -- the orphan-object
+    smuggling path that only a full indirect-object scan catches."""
+    from pypdf.generic import DictionaryObject, NameObject, TextStringObject
+
+    writer = pypdf.PdfWriter()
+    writer.add_blank_page(width=200, height=200)
+    filespec = DictionaryObject()
+    filespec.update(
+        {
+            NameObject("/Type"): NameObject("/Filespec"),
+            NameObject("/F"): TextStringObject("orphan.exe"),
+        }
+    )
+    writer._add_object(filespec)
+    return _write(writer, tmp_path / "orphan_filespec.pdf")
+
+
 def _corrupt_pdf(tmp_path: Path) -> Path:
     """A structurally corrupt PDF: a well-formed file truncated to half
     its length, well past the level of A5b's candidate-detection-level
@@ -129,6 +165,21 @@ def test_embedded_file_pdf_rejected(tmp_path: Path) -> None:
     assert result.reason_code == "PDF_EMBEDDED_FILE"
 
 
+def test_file_attachment_annotation_pdf_rejected(tmp_path: Path) -> None:
+    result = check_pdf_content_policy(_file_attachment_annotation_pdf(tmp_path))
+    assert result.passed is False
+    assert result.reason_code == "PDF_EMBEDDED_FILE"
+
+
+def test_orphan_filespec_object_rejected(tmp_path: Path) -> None:
+    # Regression test: a /Type /Filespec object not reachable via
+    # /Names/EmbeddedFiles or any annotation must still be caught by the
+    # full indirect-object scan, not just the two targeted lookups.
+    result = check_pdf_content_policy(_orphan_filespec_pdf(tmp_path))
+    assert result.passed is False
+    assert result.reason_code == "PDF_EMBEDDED_FILE"
+
+
 def test_corrupt_pdf_fails_closed(tmp_path: Path) -> None:
     result = check_pdf_content_policy(_corrupt_pdf(tmp_path))
     assert result.passed is False
@@ -163,6 +214,45 @@ def test_subprocess_invoked_with_sys_executable(
     assert argv[0] == sys.executable
     assert argv[1:3] == ["-m", "app.services.pdf_inspector_subprocess"]
     assert captured["kwargs"]["timeout"] == settings.PDF_INSPECTION_TIMEOUT_SECONDS
+
+
+def test_subprocess_env_excludes_parent_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The subprocess exists to run untrusted-file parsing where a
+    # compromise can't reach this app's secrets. Set a secret-shaped var
+    # in the parent's os.environ and confirm it is NOT copied into the
+    # env= passed to the child -- the child must get a minimal,
+    # explicitly-built environment, never `dict(os.environ)`.
+    monkeypatch.setenv("DATABASE_URL", "postgresql://should-not-leak/db")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+    monkeypatch.setenv("SESSION_SECRET_KEY", "should-not-leak-either")
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv: list[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
+        captured["env"] = kwargs.get("env")
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=json.dumps({"status": "CLEAN"}) + "\n", stderr=""
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    check_pdf_content_policy(tmp_path / "whatever.pdf")
+
+    child_env = captured["env"]
+    assert child_env is not None
+    assert "DATABASE_URL" not in child_env
+    assert "ANTHROPIC_API_KEY" not in child_env
+    assert "SESSION_SECRET_KEY" not in child_env
+    # Only the small, explicit allowlist should be present.
+    assert set(child_env).issubset(
+        {
+            "PDF_INSPECTOR_CPU_SECONDS",
+            "PDF_INSPECTOR_MEMORY_BYTES",
+            "PATH",
+            "SystemRoot",
+        }
+    )
 
 
 def test_malformed_stdout_multiple_lines_rejected() -> None:

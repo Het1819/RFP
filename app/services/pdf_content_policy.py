@@ -84,15 +84,36 @@ def _parse_subprocess_stdout(stdout: str) -> PdfPolicyResult | None:
     return None
 
 
+def _minimal_subprocess_env() -> dict[str, str]:
+    """Build the smallest environment that lets `sys.executable` actually
+    start and run the inspector module. Deliberately does NOT inherit the
+    parent's environment (`os.environ`) -- this app's config reads
+    secrets (DB/session/API keys, Redis URLs) from environment variables,
+    and the whole point of this subprocess is to run untrusted-file
+    parsing somewhere those secrets are unreachable even if `pypdf` were
+    ever exploited by a malicious PDF."""
+    env: dict[str, str] = {
+        "PDF_INSPECTOR_CPU_SECONDS": str(settings.PDF_INSPECTOR_CPU_SECONDS),
+        "PDF_INSPECTOR_MEMORY_BYTES": str(settings.PDF_INSPECTOR_MEMORY_BYTES),
+    }
+    path = os.environ.get("PATH")
+    if path:
+        env["PATH"] = path
+    if sys.platform == "win32":
+        # Required for the Windows CRT/loader to start python.exe and
+        # resolve system DLLs at all -- not needed for anything this
+        # subprocess actually does with the untrusted file.
+        system_root = os.environ.get("SystemRoot")
+        if system_root:
+            env["SystemRoot"] = system_root
+    return env
+
+
 def check_pdf_content_policy(file_path: Path) -> PdfPolicyResult:
     """Spawns the isolated inspector subprocess with a hard wall-clock
     timeout; a timeout, non-zero exit, or malformed JSON output is
     treated identically to an explicit FAILED result -- fail closed,
     never approximate a PASS."""
-    env = dict(os.environ)
-    env["PDF_INSPECTOR_CPU_SECONDS"] = str(settings.PDF_INSPECTOR_CPU_SECONDS)
-    env["PDF_INSPECTOR_MEMORY_BYTES"] = str(settings.PDF_INSPECTOR_MEMORY_BYTES)
-
     argv = [
         sys.executable,
         "-m",
@@ -105,7 +126,8 @@ def check_pdf_content_policy(file_path: Path) -> PdfPolicyResult:
             capture_output=True,
             timeout=settings.PDF_INSPECTION_TIMEOUT_SECONDS,
             text=True,
-            env=env,
+            errors="replace",
+            env=_minimal_subprocess_env(),
         )
     except subprocess.TimeoutExpired:
         # subprocess.run's `timeout` kills the child (and any pipe

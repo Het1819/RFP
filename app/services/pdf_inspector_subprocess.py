@@ -110,8 +110,6 @@ def _action_dict_is_active_content(action: object) -> str | None:
     except (AttributeError, TypeError, KeyError):
         return None
     action_type_str = str(action_type) if action_type is not None else ""
-    if action_type_str == "/URI":
-        return "PDF_ACTIVE_CONTENT"
     if action_type_str in _ACTIVE_CONTENT_ACTION_TYPES:
         return "PDF_ACTIVE_CONTENT"
     return None
@@ -139,6 +137,53 @@ def _catalog_has_embedded_files(reader: object) -> bool:
             return True
     except Exception:
         return False
+    return False
+
+
+def _all_object_numbers(reader: object) -> set[int]:
+    """Every indirect object number reachable from the file's
+    cross-reference data -- both the classic offset-table xref
+    (`reader.xref`) and, for files using cross-reference streams,
+    objects packed inside compressed object streams
+    (`reader.xref_objStm`). Metadata only: this collects object
+    *numbers*, it does not resolve or read any object content."""
+    numbers: set[int] = set()
+    try:
+        xref = reader.xref  # type: ignore[attr-defined]
+        for generation_map in xref.values():
+            numbers.update(generation_map.keys())
+    except Exception:
+        pass
+    try:
+        obj_stm = reader.xref_objStm  # type: ignore[attr-defined]
+        numbers.update(obj_stm.keys())
+    except Exception:
+        pass
+    return numbers
+
+
+def _has_orphan_filespec_object(reader: object) -> bool:
+    """Bounded scan of every indirect object in the file for a
+    `/Type /Filespec` dictionary, catching a Filespec object that isn't
+    linked from `/Names/EmbeddedFiles` or any page annotation (an
+    orphan-object smuggling technique that both of those targeted checks
+    miss). The subprocess's own CPU/memory rlimits and the parent's
+    wall-clock timeout already bound the worst-case cost of walking a
+    maliciously large file's object table."""
+    try:
+        object_numbers = _all_object_numbers(reader)
+    except Exception:
+        return False
+    for number in object_numbers:
+        try:
+            obj = reader.get_object(number)  # type: ignore[attr-defined]
+        except Exception:
+            continue
+        try:
+            if obj.get("/Type") == "/Filespec":
+                return True
+        except (AttributeError, TypeError):
+            continue
     return False
 
 
@@ -188,9 +233,9 @@ def inspect_pdf(path: str) -> tuple[str, str | None]:
     """Run all structural checks against `path`. Returns (status,
     reason_code). Never raises -- every pypdf failure is caught and
     reported as a FAILED status."""
-    import pypdf
-
     try:
+        import pypdf
+
         reader = pypdf.PdfReader(path)
 
         if reader.is_encrypted:
@@ -206,6 +251,9 @@ def inspect_pdf(path: str) -> tuple[str, str | None]:
             return "REJECTED", page_reason
 
         if _catalog_has_embedded_files(reader):
+            return "REJECTED", "PDF_EMBEDDED_FILE"
+
+        if _has_orphan_filespec_object(reader):
             return "REJECTED", "PDF_EMBEDDED_FILE"
 
         return "CLEAN", None
