@@ -99,6 +99,26 @@ application, database, Redis, or Anthropic secrets. See
 - **`LLM_PROVIDER`**: must be `anthropic`. `fake` is rejected at startup outside development/local/test.
 - **`LLM_MODEL`**: must be set explicitly (e.g. `claude-sonnet-4-6`); startup fails if unset in production.
 - **`LOCAL_STORAGE_PATH`**: must be an absolute, persistently-mounted path (e.g. `/data/storage`, matching the `app_storage` volume) — the `./data` development default is rejected in production.
+- **`QUARANTINE_STORAGE_PATH`**: must be an absolute, persistently-mounted path distinct from `LOCAL_STORAGE_PATH` — the `./data/quarantine` development default is rejected in production. See "Upload lifecycle" below.
+
+#### Upload lifecycle
+
+Every RFP and knowledge-document upload is written to quarantine storage
+first, under an application-generated storage identifier — the original
+filename the browser sent is retained only as display metadata and is
+never used to construct a filesystem path. The browser-supplied MIME type
+is untrusted and is not relied on for any decision; PDF and DOCX files are
+independently classified by server-side candidate-type detection. A file
+whose declared extension does not match its detected structure is routed
+to a rejected state and never reaches parsing, retrieval, or any LLM
+action. A file that passes candidate-type detection currently stops at a
+"queued for security scan" state — the malware-scanning stage referenced
+by that state is not yet implemented (planned for a following phase) and
+this document does **not** claim files are clean, safe, sanitized, or
+malware-free at any point before that scan exists. Knowledge documents can
+no longer be marked approved at upload time; the upload form's status
+selector was removed because the server always creates new knowledge
+documents as `PENDING` regardless of what a client submits.
 - **`NGINX_SERVER_NAME`**: the hostname Nginx answers to (`server_name`) — must exactly match `ALLOWED_HOSTS` and the hostname in `PUBLIC_BASE_URL`.
 - **`ALLOWED_HOSTS`**: comma-separated explicit hostnames the app answers to. No `*`, no empty entries; `localhost`/loopback values are rejected unless `ALLOW_LOOPBACK_HOST=true` is explicitly set (local validation only — never set this for a real deployment).
 - **`PUBLIC_BASE_URL`**: absolute `https://` URL for the public origin (e.g. `https://rfp.example.com`); no userinfo, fragment, or path; standard port only unless documented otherwise.

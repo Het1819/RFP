@@ -89,6 +89,7 @@ Do not perform automatic schema rollbacks if:
 
 ### Step 2.6: Preserve Uploaded Files and Audit Logs
 * **Uploaded Files:** Uploaded/source documents live under `LOCAL_STORAGE_PATH` (`/data/storage` in the production Compose config), backed by the `app_storage` named volume. Ensure you do not run `docker compose down -v` (which deletes volumes) -- recreating the `app` container alone (`docker compose up -d --force-recreate app`) does not touch the volume and documents survive.
+* **Quarantined Files:** New uploads land first in `QUARANTINE_STORAGE_PATH`, backed by its own named volume — do not confuse this with `LOCAL_STORAGE_PATH`. Every upload is written under an application-generated storage identifier (never the original filename) and is independently classified as a PDF/DOCX candidate; a mismatch is rejected before any parsing, retrieval, or LLM action occurs. A file that passes candidate-type detection is queued for a security-scan stage that does not exist yet in this build — an operator must never describe a quarantined or queued file as "scanned," "verified safe," or "malware-free."
 * **Audit Logs:** Ensure the log files under container stdout or host paths are preserved. Do not clear host log locations during container recreation.
 
 ### Step 2.7: Verify Rollback

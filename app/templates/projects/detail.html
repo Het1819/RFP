@@ -77,7 +77,7 @@
                     </div>
                 </div>
                 <div class="top-bar-right">
-                    {% if document and document.processing_status == 'completed' %}
+                    {% if document and document.processing_status == 'completed' and document.ingestion_status == "COMPLETED" %}
                         <a href="/projects/{{ project.id }}/matrix" class="btn btn-primary" style="padding: 0.6rem 1.25rem; font-size: 0.9rem; border-radius: var(--radius-sm);">Open Compliance Matrix &rarr;</a>
                     {% endif %}
                 </div>
@@ -135,6 +135,17 @@
 
                 <div class="feature-card" style="margin-top: var(--space-lg); padding: var(--space-lg); border-color: var(--border-color); overflow: hidden;">
                     <div style="font-size: 0.8rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em; margin-bottom: var(--space-md);">RFP Workspace Journey</div>
+                    {% if document and document.ingestion_status == "QUARANTINED" %}
+                        <span class="badge" style="margin-bottom: var(--space-md); display: inline-block; font-size: 0.75rem;">Upload received. Preparing for validation.</span>
+                    {% elif document and document.ingestion_status == "VALIDATING" %}
+                        <span class="badge" style="margin-bottom: var(--space-md); display: inline-block; font-size: 0.75rem;">Validating document type.</span>
+                    {% elif document and document.ingestion_status == "SCANNING" %}
+                        <span class="badge" style="margin-bottom: var(--space-md); display: inline-block; font-size: 0.75rem;">Awaiting security scan.</span>
+                    {% elif document and document.ingestion_status == "REJECTED_TYPE" %}
+                        <span class="badge" style="margin-bottom: var(--space-md); display: inline-block; font-size: 0.75rem;">Document rejected: please upload a valid PDF or DOCX file.</span>
+                    {% elif document and document.ingestion_status == "LEGACY_UNVERIFIED" %}
+                        <span class="badge" style="margin-bottom: var(--space-md); display: inline-block; font-size: 0.75rem;">This existing document requires security reprocessing before it can be used.</span>
+                    {% endif %}
                     
                     <div class="stepper-container">
                         <div class="stepper-line">
@@ -180,7 +191,7 @@
                         </div>
 
                         <!-- Compliance Matrix Link Card -->
-                        {% if document and document.processing_status == 'completed' %}
+                        {% if document and document.processing_status == 'completed' and document.ingestion_status == "COMPLETED" %}
                         <div class="feature-card" style="margin-top: 0; padding: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-sm); border-color: var(--border-color);">
                             <h3 style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: var(--space-sm);">
                                 <span>📋</span> Compliance & Requirements Matrix
@@ -203,7 +214,7 @@
                                 Export structured tables and drafts compiled from source-backed responses once compliance matrix reviews are finalized.
                             </p>
                             
-                            {% if document and document.processing_status == 'completed' %}
+                            {% if document and document.processing_status == 'completed' and document.ingestion_status == "COMPLETED" %}
                             <div style="display: flex; gap: var(--space-md); flex-wrap: wrap; margin-top: var(--space-xs);">
                                 <a href="/projects/{{ project.id }}/export/proposal" class="btn btn-secondary" style="padding: 0.6rem 1.25rem; font-size: 0.9rem; border-radius: var(--radius-sm);">
                                     📥 Download DOCX Proposal
@@ -298,19 +309,9 @@
                                         <label for="k-tags" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Tags</label>
                                         <input type="text" id="k-tags" name="tags" placeholder="e.g. security, pricing" style="font-size: 0.85rem; border-radius: var(--radius-sm);">
                                     </div>
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm);">
-                                        <div style="display: flex; flex-direction: column; gap: 4px;">
-                                            <label for="k-ver" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Version</label>
-                                            <input type="text" id="k-ver" name="version" value="1.0" style="font-size: 0.85rem; border-radius: var(--radius-sm);">
-                                        </div>
-                                        <div style="display: flex; flex-direction: column; gap: 4px;">
-                                            <label for="k-status" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Status</label>
-                                            <select id="k-status" name="approval_status" style="font-size: 0.85rem; border-radius: var(--radius-sm); background: var(--surface-secondary); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.45rem;">
-                                                <option value="APPROVED" selected>APPROVED</option>
-                                                <option value="PENDING">PENDING</option>
-                                                <option value="REJECTED">REJECTED</option>
-                                            </select>
-                                        </div>
+                                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                                        <label for="k-ver" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Version</label>
+                                        <input type="text" id="k-ver" name="version" value="1.0" style="font-size: 0.85rem; border-radius: var(--radius-sm);">
                                     </div>
                                     <div style="display: flex; flex-direction: column; gap: 4px;">
                                         <label for="k-date" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Next Review</label>
