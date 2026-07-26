@@ -115,6 +115,7 @@ def transition(
     user_id: uuid.UUID | None,
     reason_code: str | None = None,
     safe_summary: str | None = None,
+    audit_detail: dict[str, Any] | None = None,
 ) -> None:
     """Validate and apply an ingestion-status transition on `document`.
 
@@ -124,6 +125,17 @@ def transition(
     (idempotent) and do not write a duplicate audit event. Raises
     IngestionStateError, leaving `document` unmutated, if `new_status` is
     unknown or not reachable from the document's current status.
+
+    `audit_detail` is merged into the AuditEvent's `details` JSON only -
+    it is never written to `document.rejection_reason_code` or
+    `document.operator_failure_summary`, both of which templates/UI may
+    eventually surface to end users. This is the sanctioned place for
+    operator-only forensic detail (e.g. a malware signature name, or
+    scan-attempt-exhaustion bookkeeping) that must never leak into a
+    user-facing rejection message. Keys in `audit_detail` that collide
+    with the base `from`/`to`/`reason_code` keys are silently overridden
+    by the base keys, not the other way around, so callers cannot
+    accidentally corrupt the transition-identity fields.
     """
     if new_status not in IngestionStatus.ALL:
         raise IngestionStateError(f"Unknown ingestion status: {new_status!r}")
@@ -144,7 +156,11 @@ def transition(
     if safe_summary is not None:
         document.operator_failure_summary = safe_summary
 
-    details: dict[str, Any] = {"from": current, "to": new_status}
+    details: dict[str, Any] = {}
+    if audit_detail is not None:
+        details.update(audit_detail)
+    details["from"] = current
+    details["to"] = new_status
     if reason_code is not None:
         details["reason_code"] = reason_code
 

@@ -160,6 +160,14 @@ class Settings(BaseSettings):
     CLAMAV_IO_TIMEOUT_SECONDS: float = 30.0
     CLAMAV_STREAM_MAX_BYTES: int = 10 * 1024 * 1024  # must be <= MAX_UPLOAD_SIZE
     CLAMAV_MAX_SIGNATURE_AGE_HOURS: int = 48
+    # Maximum number of scan attempts (app.services.malware_scan.run_scan
+    # invocations) a document may accumulate before it is left in
+    # SCAN_FAILED as the operator-visible terminal-for-now state instead
+    # of being eligible for a further bounded retry. The retry scheduler
+    # itself (Task 6, worker wiring - not yet built) is what reads this
+    # against Document.scan_attempt_count to decide whether to re-arm
+    # SCANNING; run_scan only records the attempt count and outcome.
+    SCAN_MAX_ATTEMPTS: int = 3
     # --- PDF content-policy inspection (Phase A5c) ---
     # The inspector itself runs in an isolated OS subprocess (see
     # app.services.pdf_inspector_subprocess) -- these settings bound both
