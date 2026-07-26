@@ -111,11 +111,12 @@ is untrusted and is not relied on for any decision; PDF and DOCX files are
 independently classified by server-side candidate-type detection. A file
 whose declared extension does not match its detected structure is routed
 to a rejected state and never reaches parsing, retrieval, or any LLM
-action. A file that passes candidate-type detection currently stops at a
-"queued for security scan" state — the malware-scanning stage referenced
-by that state is not yet implemented (planned for a following phase) and
-this document does **not** claim files are clean, safe, sanitized, or
-malware-free at any point before that scan exists. Knowledge documents can
+action. A file that passes candidate-type detection is queued for a security scan
+(ClamAV malware scanning plus PDF/DOCX content-policy inspection — see
+"Malware Scanning & Content-Policy Inspection" below). This document does
+**not** claim a file is clean, safe, sanitized, or malware-free merely
+because it reached `CLEAN_PENDING_PROMOTION` — promotion to actually
+usable `CLEAN` storage is out of scope for this phase (A5d). Knowledge documents can
 no longer be marked approved at upload time; the upload form's status
 selector was removed because the server always creates new knowledge
 documents as `PENDING` regardless of what a client submits.
@@ -394,6 +395,189 @@ reachable externally. The app's own Docker healthcheck still reaches
 `/readyz` directly over the private `backend` network, bypassing Nginx
 entirely. A minimal `/healthz-edge` endpoint (loopback-restricted, no
 dependency/version details) exists for local container/orchestrator use.
+
+---
+
+## 9b. Malware Scanning & Content-Policy Inspection (Phase A5c)
+
+Phase A5c adds the scan stage that A5b's quarantine-first upload lifecycle
+(see "Upload lifecycle" above) referenced but did not yet implement. Every
+document that passes candidate-type detection now moves from `VALIDATING`
+into `SCANNING`, where it is run through ClamAV malware scanning and then,
+on a clean malware result, a PDF- or DOCX-specific content-policy
+inspector. **No document is safe to open, download, parse, or send to the
+LLM before it leaves `SCANNING` with a `CLEAN_PENDING_PROMOTION` (or
+better) outcome** — and, per the ingestion-state module docstring,
+`CLEAN_PENDING_PROMOTION` itself is still not usable; promoting it to the
+actually-parseable `CLEAN` state is out of scope for this phase (A5d).
+
+### clamd image and signature-update policy
+`docker-compose.prod.yml` pins the `clamd` service to a digest:
+```
+image: clamav/clamav@sha256:e7ead98e7e07231b151bce988e0cfb0a3b46e6e7046d9dd44fd838c0df724a03
+```
+resolved 2026-07-26 via `docker pull clamav/clamav:1.4` (ClamAV 1.4.5 at
+resolution time). `clamd` joins only the private `backend` network, has no
+published ports, receives no secrets, and no application/database/Redis/
+Anthropic credential ever reaches it — only `worker` talks to it, over the
+network, sending file bytes via the INSTREAM protocol. Its signature
+database lives on its own `clamav_signatures` named volume.
+
+**Signature freshness is two separate concerns, and this repo only owns
+one of them:**
+- **freshclam** (ClamAV's own signature updater) runs *inside* the `clamd`
+  container on its own schedule. This repo does not configure, trigger, or
+  manage freshclam directly — it is the upstream image's built-in
+  behavior.
+- **`CLAMAV_MAX_SIGNATURE_AGE_HOURS`** (default `48`, see
+  `app/core/config.py`) is an **application-side, fail-closed staleness
+  check** — before every scan attempt, `app.services.malware_scan` calls
+  clamd's `VERSION` command and rejects the attempt into `SCAN_FAILED`
+  with reason code `SIGNATURE_DATABASE_STALE` if the reported signature
+  timestamp is older than this threshold, or if the timestamp cannot be
+  parsed at all (a missing/unparseable timestamp is treated as stale, not
+  assumed fresh). This is **not** a freshclam configuration knob — it is
+  this application's independent judgment call about whether it trusts the
+  currently-loaded signatures enough to rely on a clean result.
+
+### Ingestion state list (Phase A5c)
+`app/services/ingestion_state.py`'s `IngestionStatus` now defines:
+
+| State | Meaning |
+|---|---|
+| `QUARANTINED` | Just written to quarantine storage; not yet validated. |
+| `VALIDATING` | Candidate-type detection (A5b) in progress. |
+| `SCANNING` | Malware scan and/or content-policy inspection in progress or queued for (re)attempt. |
+| `REJECTED_TYPE` | Declared extension did not match detected structure (A5b). Terminal. |
+| `REJECTED_MALWARE` | ClamAV reported `FOUND`. Terminal. |
+| `REJECTED_CONTENT_POLICY` | PDF/DOCX inspector found a confirmed policy violation (not an inspection failure). Terminal. |
+| `SCAN_FAILED` | The scan attempt could not reach a verdict (scanner unavailable, timeout, stale signatures, inspection failure, quarantine-integrity mismatch, or an unexpected internal error). Re-enterable into `SCANNING` for a bounded retry — see "Retry policy" below — until `scan_attempt_count` reaches `SCAN_MAX_ATTEMPTS`, at which point it is the operator-visible terminal-for-now state. |
+| `CLEAN_PENDING_PROMOTION` | Passed both malware scanning and content-policy inspection. **Still not safe to open, download, parse, or send to the LLM** — promotion to `CLEAN` is A5d's job, not this phase's. No outbound transitions exist from this state yet. |
+| `CLEAN` | (Reserved for A5d's promotion step.) Only `CLEAN` documents may enter `PARSING`. |
+| `PARSING` / `PARSE_FAILED` / `COMPLETED` | Unchanged from prior phases. |
+| `LEGACY_UNVERIFIED` | Pre-A5b documents that predate this pipeline; re-enters at `VALIDATING`. |
+
+Content-policy inspection is not a separate persisted state — it runs
+inside `SCANNING`, after a clean malware result, so `REJECTED_MALWARE` and
+`REJECTED_CONTENT_POLICY` are both reachable directly from `SCANNING`. All
+transitions are enforced centrally by `ingestion_state.transition()`;
+routes, worker tasks, and templates never set `ingestion_status` directly.
+
+### PDF content-policy inspection: checks and known limitations
+Implemented in `app/services/pdf_content_policy.py` (parent-process
+orchestrator) and `app/services/pdf_inspector_subprocess.py` (the actual
+`pypdf`-based inspector). `pypdf` is imported **only** inside the
+subprocess, which is spawned via `sys.executable` (never a shell), never
+inherits the parent's environment (so no DB/session/API-key secrets are
+reachable even if `pypdf` were exploited), and is resource-bounded before
+the untrusted file is opened (`PDF_INSPECTOR_CPU_SECONDS` CPU-time rlimit,
+`PDF_INSPECTOR_MEMORY_BYTES` address-space rlimit — both no-ops on
+Windows, matching this repo's existing POSIX-only rlimit pattern). Any
+anomaly from the subprocess — timeout, non-zero exit, malformed/multi-line
+stdout — is treated identically to an explicit failure: the parent always
+fails closed, never approximates a pass.
+
+Checks performed (structural/metadata only — the inspector never calls
+`extract_text()`, `extract_images()`, rendering, or any API that
+interprets page content):
+- Encryption flag (`PDF_ENCRYPTED`).
+- Catalog-level `/OpenAction` or `/AA` (auto-run actions) and page-level
+  annotations with `/S` of `/JS`, `/JavaScript`, `/Launch`, or `/URI`
+  (`PDF_ACTIVE_CONTENT`).
+- `/Names/EmbeddedFiles` attachment names, `/FileAttachment` page
+  annotations, and a bounded full-object-table scan for orphan
+  `/Type /Filespec` objects not linked from either of those (an
+  orphan-object smuggling technique targeted checks alone would miss)
+  (`PDF_EMBEDDED_FILE`).
+- Any `pypdf` exception, timeout, or unparseable result (`PDF_INSPECTION_FAILED`).
+
+**Known limitation (stated plainly, not padded):** this is
+structural-metadata-only inspection via an isolated `pypdf` subprocess —
+it is **not** a full security audit of the PDF specification's entire
+attack surface. It does not render pages, extract text, or evaluate
+JavaScript. The orphan-`Filespec` scan mitigates but does not eliminate
+gaps in catalog-tree coverage; a maliciously crafted file exploiting a
+`pypdf` parsing bug itself is bounded by the subprocess's rlimits and
+isolation, not prevented by these checks.
+
+### DOCX content-policy inspection: checks and known limitations
+Implemented in `app/services/docx_content_policy.py`, running directly in
+the worker process (no subprocess isolation — the standard-library `zipfile`
+module is the only dependency beyond the A5b detection module's hardened
+XML parser). Every check reads only ZIP central-directory metadata
+(`infolist()`/`getinfo()`) or a small bounded prefix of a member's
+decompressed bytes; the module never calls `ZipFile.extract`/`extractall`
+and never writes a member to disk.
+
+Checks performed:
+- Malformed/corrupt ZIP structure, duplicate member names, member count
+  over `DOCX_DETECTION_MAX_MEMBERS`, any encrypted ZIP entry (illegitimate
+  in a genuine OOXML package), path-traversal or absolute/UNC member
+  names, and nested-archive extensions (`.zip`/`.docx`/`.docm`/`.rar`/
+  `.7z`/`.tar`/`.gz`) smuggled in as member names (`DOCX_MALFORMED_PACKAGE`).
+- Total declared uncompressed size over `DOCX_MAX_UNCOMPRESSED_TOTAL_BYTES`,
+  or a declared uncompressed:compressed ratio over
+  `DOCX_MAX_COMPRESSION_RATIO` (zip-bomb defense) (`DOCX_ARCHIVE_LIMIT`).
+- `vbaProject.bin` present, or a VBA-macro content-type marker in
+  `[Content_Types].xml` (`DOCX_MACRO_PRESENT`).
+- An OLE-magic-prefixed member under `word/embeddings/` (`DOCX_OLE_PRESENT`).
+- An `External` `TargetMode` relationship in
+  `word/_rels/document.xml.rels` (`DOCX_EXTERNAL_RELATIONSHIP`).
+
+**Known limitation (stated plainly, not padded):** this is bounded
+central-directory inspection, **not** full OOXML schema validation. It is
+deliberately independently correct (re-checks a handful of things A5b's
+`detect_docx_candidate` already checks, as defense in depth) but does not
+parse or validate the full document XML content beyond `[Content_Types].xml`
+and the document relationships part, and it has no distinct "inspection
+could not determine" outcome — every failure mode it can produce already
+resolves to a definite, confirmed-violation reason code (an actual
+exception is caught by `run_scan`'s outer handler instead).
+
+### Resource limits and failure modes
+| Setting | Default | Purpose | On exceeding it |
+|---|---|---|---|
+| `CLAMAV_STREAM_MAX_BYTES` | 10 MiB (must be ≤ `MAX_UPLOAD_SIZE`; enforced at startup) | Client-side cap enforced incrementally while streaming to clamd, never by buffering the whole file. Distinct from clamd's own daemon-side `StreamMaxLength`. | `ScanOutcome.SIZE_LIMIT_EXCEEDED` → `SCAN_FAILED` / `SCAN_SIZE_LIMIT_EXCEEDED`. |
+| `PDF_INSPECTION_TIMEOUT_SECONDS` | 15.0 | Parent-process wall-clock wait for the PDF inspector subprocess; kept above the CPU rlimit to allow for process startup/I-O wait. | Subprocess timeout → `SCAN_FAILED` / `PDF_INSPECTION_FAILED`. |
+| `PDF_INSPECTOR_CPU_SECONDS` | 10 | Subprocess CPU-time rlimit, applied before the untrusted file is opened (POSIX only). | Subprocess killed by the OS → non-zero exit → `SCAN_FAILED` / `PDF_INSPECTION_FAILED`. |
+| `PDF_INSPECTOR_MEMORY_BYTES` | 512 MiB | Subprocess address-space rlimit (POSIX only). | Subprocess killed/OOM → non-zero exit → `SCAN_FAILED` / `PDF_INSPECTION_FAILED`. |
+| `DOCX_MAX_UNCOMPRESSED_TOTAL_BYTES` | 200 MiB | Zip-bomb defense: total declared uncompressed size across all members. | `REJECTED_CONTENT_POLICY` / `DOCX_ARCHIVE_LIMIT` (a confirmed rejection, not a scan failure). |
+| `DOCX_MAX_COMPRESSION_RATIO` | 100:1 | Zip-bomb defense: declared uncompressed:compressed ratio, far beyond ordinary XML/text/image content. | `REJECTED_CONTENT_POLICY` / `DOCX_ARCHIVE_LIMIT`. |
+| `CLAMAV_MAX_SIGNATURE_AGE_HOURS` | 48 | App-side fail-closed staleness threshold on clamd's reported signature timestamp (see above). | `SCAN_FAILED` / `SIGNATURE_DATABASE_STALE`. |
+| `CLAMAV_CONNECT_TIMEOUT_SECONDS` / `CLAMAV_IO_TIMEOUT_SECONDS` | 5.0 / 30.0 | Socket connect/read timeouts against `clamd`. | Connect failure → `SCAN_FAILED` / `SCANNER_UNAVAILABLE`; I/O timeout → `SCAN_FAILED` / `SCANNER_TIMEOUT`. |
+
+A digest-drift guard also runs before every scan attempt: the quarantine
+path is re-resolved and its SHA-256 recomputed; any mismatch against the
+digest recorded at quarantine time, or a missing file, fails closed into
+`SCAN_FAILED` / `QUARANTINE_INTEGRITY_MISMATCH` rather than scanning bytes
+that may not be what was originally quarantined.
+
+### Retry policy
+Scan attempts are bounded, not infinite and not silently dropped:
+- `SCAN_MAX_ATTEMPTS` (default `3`) caps the number of `run_scan`
+  invocations a document may accumulate. Once
+  `scan_attempt_count >= SCAN_MAX_ATTEMPTS`, a document left in
+  `SCAN_FAILED` is the **operator-visible terminal-for-now state** — it is
+  deliberately not re-armed for another attempt.
+- Backoff is exponential with jitter:
+  `delay = min(SCAN_RETRY_BACKOFF_BASE_SECONDS * 2**(attempt - 1),
+  SCAN_RETRY_BACKOFF_MAX_SECONDS)` (defaults: base `5`s, max `300`s), then
+  ±50% jitter is applied. The real-queue path defers the retry job via
+  arq's `_defer_by`; the `QUEUE_ENABLED=False` sync fallback (used by most
+  of the test suite and dev/CI environments without Redis) computes the
+  same delay value but does not actually wait on it before running the
+  next attempt inline — a deliberate, documented simplification for
+  dev/test only.
+- Exhaustion is always operator-visible: every `SCAN_FAILED` transition
+  writes a structured `AuditEvent` (action `document_ingestion_transition`)
+  including `scan_attempt_count`, and the final exhausting attempt adds
+  `scan_exhausted: true` plus a `logger.warning` line. No scan failure is
+  ever silently dropped — an exhausted document simply stops being
+  automatically retried and requires operator attention.
+- A malware signature name (when ClamAV reports `FOUND`) and any other
+  forensic detail is recorded only in `AuditEvent.details` — never in
+  `document.rejection_reason_code` or `document.operator_failure_summary`,
+  both of which templates/UI may eventually surface to end users.
 
 ---
 
