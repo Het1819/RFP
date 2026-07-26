@@ -6,9 +6,12 @@ enforcement point for the security invariants in AGENTS.md / A5 spec
 section 3: quarantined files cannot be downloaded, approved, retrieved,
 sent to the LLM, or parsed by the legacy in-process parser; only files
 that pass structural validation, detected-type validation, malware
-scanning, and content-policy inspection may reach CLEAN; only CLEAN
-files may be parsed; only successfully parsed documents may reach
-COMPLETED and enter requirement extraction.
+scanning, and content-policy inspection may reach
+CLEAN_PENDING_PROMOTION; only CLEAN files may be parsed; only
+successfully parsed documents may reach COMPLETED and enter requirement
+extraction. Promotion from CLEAN_PENDING_PROMOTION to CLEAN is out of
+scope for this phase (A5d) - CLEAN_PENDING_PROMOTION has no outbound
+transitions here.
 
 NOTE: transition() does not itself provide concurrency safety - it is a
 plain read-modify-write against the ORM object passed in, with no row
@@ -35,25 +38,29 @@ class IngestionStatus:
     QUARANTINED = "QUARANTINED"
     VALIDATING = "VALIDATING"
     SCANNING = "SCANNING"
-    SCAN_RETRY_PENDING = "SCAN_RETRY_PENDING"
     REJECTED_TYPE = "REJECTED_TYPE"
     REJECTED_MALWARE = "REJECTED_MALWARE"
     REJECTED_CONTENT_POLICY = "REJECTED_CONTENT_POLICY"
+    SCAN_FAILED = "SCAN_FAILED"
+    CLEAN_PENDING_PROMOTION = "CLEAN_PENDING_PROMOTION"
     CLEAN = "CLEAN"
     PARSING = "PARSING"
     PARSE_FAILED = "PARSE_FAILED"
     COMPLETED = "COMPLETED"
     LEGACY_UNVERIFIED = "LEGACY_UNVERIFIED"
+    # SCAN_RETRY_PENDING removed: A5a scaffolded it, nothing ever wrote
+    # it, A5c uses SCAN_FAILED for the same purpose (see plan rationale).
 
     ALL = frozenset(
         {
             QUARANTINED,
             VALIDATING,
             SCANNING,
-            SCAN_RETRY_PENDING,
             REJECTED_TYPE,
             REJECTED_MALWARE,
             REJECTED_CONTENT_POLICY,
+            SCAN_FAILED,
+            CLEAN_PENDING_PROMOTION,
             CLEAN,
             PARSING,
             PARSE_FAILED,
@@ -74,16 +81,17 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     ),
     IngestionStatus.SCANNING: frozenset(
         {
-            IngestionStatus.CLEAN,
+            IngestionStatus.CLEAN_PENDING_PROMOTION,
             IngestionStatus.REJECTED_MALWARE,
             IngestionStatus.REJECTED_CONTENT_POLICY,
-            IngestionStatus.SCAN_RETRY_PENDING,
+            IngestionStatus.SCAN_FAILED,
         }
     ),
-    IngestionStatus.SCAN_RETRY_PENDING: frozenset({IngestionStatus.SCANNING}),
+    IngestionStatus.SCAN_FAILED: frozenset({IngestionStatus.SCANNING}),
     IngestionStatus.REJECTED_TYPE: frozenset(),
     IngestionStatus.REJECTED_MALWARE: frozenset(),
     IngestionStatus.REJECTED_CONTENT_POLICY: frozenset(),
+    IngestionStatus.CLEAN_PENDING_PROMOTION: frozenset(),  # A5d adds -> CLEAN
     IngestionStatus.CLEAN: frozenset({IngestionStatus.PARSING}),
     IngestionStatus.PARSING: frozenset(
         {IngestionStatus.COMPLETED, IngestionStatus.PARSE_FAILED}

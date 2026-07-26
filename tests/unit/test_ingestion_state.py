@@ -135,6 +135,82 @@ class TestTransitionValidity:
         )
 
 
+class TestA5cScanAndContentPolicyStates:
+    """SCAN_FAILED / CLEAN_PENDING_PROMOTION - A5c state-machine changes.
+
+    CLEAN is reserved for A5d's promotion step; SCANNING must never
+    transition directly to CLEAN in this phase, and
+    CLEAN_PENDING_PROMOTION has no outbound transitions yet.
+    """
+
+    def test_scanning_to_clean_pending_promotion_is_legal(self, db) -> None:
+        org_id, user_id = get_default_org_and_user(db)
+        doc = _make_document(user_id)
+        doc.ingestion_status = IngestionStatus.SCANNING
+        transition(
+            db,
+            doc,
+            IngestionStatus.CLEAN_PENDING_PROMOTION,
+            org_id=org_id,
+            user_id=user_id,
+        )
+        assert doc.ingestion_status == IngestionStatus.CLEAN_PENDING_PROMOTION
+
+    def test_scanning_to_clean_directly_is_illegal(self, db) -> None:
+        org_id, user_id = get_default_org_and_user(db)
+        doc = _make_document(user_id)
+        doc.ingestion_status = IngestionStatus.SCANNING
+        with pytest.raises(IngestionStateError):
+            transition(db, doc, IngestionStatus.CLEAN, org_id=org_id, user_id=user_id)
+        assert doc.ingestion_status == IngestionStatus.SCANNING  # unchanged
+
+    def test_scanning_to_scan_failed_is_legal(self, db) -> None:
+        org_id, user_id = get_default_org_and_user(db)
+        doc = _make_document(user_id)
+        doc.ingestion_status = IngestionStatus.SCANNING
+        transition(db, doc, IngestionStatus.SCAN_FAILED, org_id=org_id, user_id=user_id)
+        assert doc.ingestion_status == IngestionStatus.SCAN_FAILED
+
+    def test_scan_failed_to_scanning_is_legal(self, db) -> None:
+        org_id, user_id = get_default_org_and_user(db)
+        doc = _make_document(user_id)
+        doc.ingestion_status = IngestionStatus.SCAN_FAILED
+        transition(db, doc, IngestionStatus.SCANNING, org_id=org_id, user_id=user_id)
+        assert doc.ingestion_status == IngestionStatus.SCANNING
+
+    def test_scan_failed_to_clean_pending_promotion_is_illegal(self, db) -> None:
+        """Must re-enter SCANNING before reaching CLEAN_PENDING_PROMOTION."""
+        org_id, user_id = get_default_org_and_user(db)
+        doc = _make_document(user_id)
+        doc.ingestion_status = IngestionStatus.SCAN_FAILED
+        with pytest.raises(IngestionStateError):
+            transition(
+                db,
+                doc,
+                IngestionStatus.CLEAN_PENDING_PROMOTION,
+                org_id=org_id,
+                user_id=user_id,
+            )
+        assert doc.ingestion_status == IngestionStatus.SCAN_FAILED  # unchanged
+
+    def test_clean_pending_promotion_has_no_outbound_transitions(self) -> None:
+        assert (
+            ALLOWED_TRANSITIONS[IngestionStatus.CLEAN_PENDING_PROMOTION] == frozenset()
+        )
+
+    def test_clean_pending_promotion_to_clean_is_illegal(self, db) -> None:
+        """Reserved for A5d - not reachable in this phase."""
+        org_id, user_id = get_default_org_and_user(db)
+        doc = _make_document(user_id)
+        doc.ingestion_status = IngestionStatus.CLEAN_PENDING_PROMOTION
+        with pytest.raises(IngestionStateError):
+            transition(db, doc, IngestionStatus.CLEAN, org_id=org_id, user_id=user_id)
+
+    def test_scan_retry_pending_no_longer_a_valid_status(self) -> None:
+        assert "SCAN_RETRY_PENDING" not in IngestionStatus.ALL
+        assert not hasattr(IngestionStatus, "SCAN_RETRY_PENDING")
+
+
 class TestPersistedRoundTrip:
     def test_transition_persists_through_real_ingestion_status_column(self, db) -> None:
         """Persist a real Document row, call transition() on it, then

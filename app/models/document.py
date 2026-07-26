@@ -76,7 +76,21 @@ class Document(Base):
     scan_completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
+    scan_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    scan_attempt_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     content_policy_status: Mapped[str | None] = mapped_column(String(30), nullable=True)
+    content_policy_version: Mapped[str | None] = mapped_column(
+        String(50), nullable=True
+    )
+    # Snapshot of sha256_digest/file_path captured at the moment a scan
+    # attempt starts, so malware_scan.py can detect (and fail closed on) a
+    # document whose quarantine file or digest changed between enqueue and
+    # scan execution.
+    scan_digest_snapshot: Mapped[str | None] = mapped_column(String(64), nullable=True)
     parser_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
     parser_completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
