@@ -39,14 +39,14 @@ COPY --from=python-builder /opt/venv /opt/venv
 COPY --from=frontend-builder /app/app/static/dist /app/app/static/dist
 COPY . /app
 
-# Persistent-storage mount point: created here (not left for Docker to
+# Persistent-storage mount points: created here (not left for Docker to
 # auto-create as root on first volume mount) so the non-root runtime user
-# can actually write to it once docker-compose.prod.yml mounts a volume
-# at this path.
-RUN mkdir -p /data/storage
+# can actually write to them once docker-compose.prod.yml mounts a volume
+# at these paths.
+RUN mkdir -p /data/storage /data/quarantine
 
 # Ensure correct permissions
-RUN chown -R appuser:appgroup /app /data/storage
+RUN chown -R appuser:appgroup /app /data/storage /data/quarantine
 
 # Set path and env vars
 ENV PATH="/opt/venv/bin:$PATH"

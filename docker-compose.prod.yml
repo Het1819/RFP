@@ -160,6 +160,14 @@ services:
       ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
       STORAGE_BACKEND: local
       LOCAL_STORAGE_PATH: /data/storage
+      # QUARANTINE_STORAGE_PATH: the worker has no quarantine_storage
+      # volume mounted (see the `app` service comment on why -- no
+      # worker-side security-processing stage exists yet in A5b) and never
+      # reads/writes this path. It is set here only because Settings'
+      # production-hardening validator unconditionally requires a non-dev-
+      # default value regardless of process role, per the same shared-
+      # Settings-class limitation described above for AUTH_MODE et al.
+      QUARANTINE_STORAGE_PATH: /data/quarantine
       SESSION_COOKIE_NAME: __Host-rfp_session
       TRUSTED_PROXY_IPS: ${NGINX_BACKEND_IP:-172.28.0.10}
       ALLOWED_HOSTS: ${NGINX_SERVER_NAME:-localhost}
