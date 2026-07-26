@@ -132,6 +132,19 @@ class Settings(BaseSettings):
     QUARANTINE_CHUNK_SIZE_BYTES: int = 1024 * 1024  # 1 MiB
     MAX_DISPLAY_FILENAME_LENGTH: int = 255
     DOCX_DETECTION_MAX_MEMBERS: int = 5000
+
+    # --- ClamAV malware scanning (Phase A5c) ---
+    # clamd's own daemon-side StreamMaxLength is configured separately in
+    # the clamd deployment; CLAMAV_STREAM_MAX_BYTES is this app's
+    # client-side limit, enforced incrementally while streaming (never by
+    # buffering the whole file) so an oversized upload is rejected before
+    # more than one extra chunk is sent to the daemon.
+    CLAMAV_HOST: str = "clamd"
+    CLAMAV_PORT: int = 3310
+    CLAMAV_CONNECT_TIMEOUT_SECONDS: float = 5.0
+    CLAMAV_IO_TIMEOUT_SECONDS: float = 30.0
+    CLAMAV_STREAM_MAX_BYTES: int = 10 * 1024 * 1024  # must be <= MAX_UPLOAD_SIZE
+    CLAMAV_MAX_SIGNATURE_AGE_HOURS: int = 48
     LLM_PROVIDER: str = "fake"
     ANTHROPIC_API_KEY: str = ""
     LLM_MODEL: str = ""
@@ -260,6 +273,17 @@ class Settings(BaseSettings):
                 "SESSION_IDLE_TIMEOUT_SECONDS must be shorter than "
                 "SESSION_ABSOLUTE_TIMEOUT_SECONDS"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_clamav_config(self) -> "Settings":
+        # Structural invariant enforced in every environment (not just
+        # production): a client-side scan-stream limit greater than the
+        # upload limit is always a misconfiguration -- no upload can ever
+        # exceed MAX_UPLOAD_SIZE, so a larger CLAMAV_STREAM_MAX_BYTES would
+        # be dead configuration masking a real bug.
+        if self.CLAMAV_STREAM_MAX_BYTES > self.MAX_UPLOAD_SIZE:
+            raise ValueError("CLAMAV_STREAM_MAX_BYTES must not exceed MAX_UPLOAD_SIZE")
         return self
 
     @model_validator(mode="after")
