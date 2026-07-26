@@ -1,7 +1,7 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -99,6 +99,21 @@ class Document(Base):
         String(100), nullable=True
     )
     operator_failure_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    promotion_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    promotion_completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    promotion_attempt_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    clean_storage_identifier: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    cleanup_pending: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
 
     pages: Mapped[list["DocumentPage"]] = relationship(
         "DocumentPage", back_populates="document", cascade="all, delete-orphan"

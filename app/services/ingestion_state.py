@@ -43,13 +43,13 @@ class IngestionStatus:
     REJECTED_CONTENT_POLICY = "REJECTED_CONTENT_POLICY"
     SCAN_FAILED = "SCAN_FAILED"
     CLEAN_PENDING_PROMOTION = "CLEAN_PENDING_PROMOTION"
+    PROMOTING = "PROMOTING"
+    PROMOTION_FAILED = "PROMOTION_FAILED"
     CLEAN = "CLEAN"
     PARSING = "PARSING"
     PARSE_FAILED = "PARSE_FAILED"
     COMPLETED = "COMPLETED"
     LEGACY_UNVERIFIED = "LEGACY_UNVERIFIED"
-    # SCAN_RETRY_PENDING removed: A5a scaffolded it, nothing ever wrote
-    # it, A5c uses SCAN_FAILED for the same purpose (see plan rationale).
 
     ALL = frozenset(
         {
@@ -61,6 +61,8 @@ class IngestionStatus:
             REJECTED_CONTENT_POLICY,
             SCAN_FAILED,
             CLEAN_PENDING_PROMOTION,
+            PROMOTING,
+            PROMOTION_FAILED,
             CLEAN,
             PARSING,
             PARSE_FAILED,
@@ -91,7 +93,11 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     IngestionStatus.REJECTED_TYPE: frozenset(),
     IngestionStatus.REJECTED_MALWARE: frozenset(),
     IngestionStatus.REJECTED_CONTENT_POLICY: frozenset(),
-    IngestionStatus.CLEAN_PENDING_PROMOTION: frozenset(),  # A5d adds -> CLEAN
+    IngestionStatus.CLEAN_PENDING_PROMOTION: frozenset({IngestionStatus.PROMOTING}),
+    IngestionStatus.PROMOTING: frozenset(
+        {IngestionStatus.CLEAN, IngestionStatus.PROMOTION_FAILED}
+    ),
+    IngestionStatus.PROMOTION_FAILED: frozenset({IngestionStatus.PROMOTING}),
     IngestionStatus.CLEAN: frozenset({IngestionStatus.PARSING}),
     IngestionStatus.PARSING: frozenset(
         {IngestionStatus.COMPLETED, IngestionStatus.PARSE_FAILED}
