@@ -24,6 +24,7 @@ from app.models.evidence import EvidenceLink
 from app.models.project import ProposalProject
 from app.models.requirement import Requirement
 from app.models.response import DraftResponse
+from app.services.ingestion_state import IngestionStatus
 
 
 def _make_project(db, org_id, user_id, name="Test Project"):
@@ -48,6 +49,7 @@ def _make_document(
     approval_status="APPROVED",
     doc_role="knowledge_base",
     name="KnowledgeDoc",
+    ingestion_status=IngestionStatus.COMPLETED,
 ):
     doc = Document(
         project_id=project_id,
@@ -59,6 +61,7 @@ def _make_document(
         approval_status=approval_status,
         created_by_id=user_id,
         content=content,
+        ingestion_status=ingestion_status,
     )
     db.add(doc)
     db.commit()

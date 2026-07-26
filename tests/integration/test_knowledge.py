@@ -133,6 +133,7 @@ def test_knowledge_base_flow(client, db):
         approval_status="APPROVED",
         version="2.1",
         created_by_id=user_id,
+        ingestion_status=IngestionStatus.COMPLETED,
     )
     db.add(doc)
     db.commit()

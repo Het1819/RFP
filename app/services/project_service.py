@@ -12,7 +12,7 @@ from app.models.audit import AuditEvent
 from app.models.document import Document, DocumentPage
 from app.models.project import ProposalProject
 from app.services.extractor import extract_pages
-from app.services.ingestion_state import IngestionStatus
+from app.services.ingestion_state import IngestionStateError, IngestionStatus
 
 _TERMINAL_REJECTED_STATUSES = frozenset(
     {
@@ -283,6 +283,17 @@ async def process_job_pipeline_async(db: Session, job: Any) -> None:
         doc = db.scalar(select(Document).where(Document.id == job.document_id))
         if not doc:
             raise ValueError("Associated document record not found")
+
+        # Fail closed: the legacy in-process parser (PyMuPDF / python-docx)
+        # must never run against a document that has not passed quarantine
+        # validation and malware/content-policy scanning. In normal A5b
+        # operation no such document is ever enqueued (see Task 6/7), so
+        # this is a defense-in-depth backstop, not an expected path.
+        if doc.ingestion_status != IngestionStatus.CLEAN:
+            raise IngestionStateError(
+                "Document has not passed required security validation "
+                f"(ingestion_status={doc.ingestion_status!r}, expected CLEAN)"
+            )
 
         doc.processing_status = "processing"
         db.commit()

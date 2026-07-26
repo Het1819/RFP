@@ -102,6 +102,7 @@ def test_job_idempotency_prevents_duplication(client, db, monkeypatch):
         doc_role="rfp",
         processing_status="pending",
         created_by_id=user_id,
+        ingestion_status=IngestionStatus.CLEAN,
     )
     db.add(doc)
     db.commit()
@@ -195,6 +196,7 @@ def test_failed_processing_logs_safe_error(client, db, monkeypatch):
         doc_role="rfp",
         processing_status="pending",
         created_by_id=user_id,
+        ingestion_status=IngestionStatus.CLEAN,
     )
     db.add(doc)
     db.commit()

@@ -8,6 +8,7 @@ from app.core.security import get_current_org_and_user
 from app.models.document import Document, DocumentPage
 from app.models.project import ProposalProject
 from app.models.requirement import Requirement
+from app.services.ingestion_state import IngestionStatus
 
 
 def test_production_app_env_blocks_default_user(db, monkeypatch):
@@ -239,6 +240,7 @@ def test_valid_same_project_evidence_linking(client, db):
         approval_status="APPROVED",
         created_by_id=user_id,
         content="Exact evidence snippet string.",
+        ingestion_status=IngestionStatus.COMPLETED,
     )
     db.add(doc)
 
