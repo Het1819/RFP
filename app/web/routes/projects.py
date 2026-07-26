@@ -1,7 +1,6 @@
 import logging
 import uuid
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
 from fastapi import (
@@ -198,7 +197,7 @@ def upload_knowledge_action(
     file: UploadFile = File(...),
     owner_name: str = Form(None),
     tags: str = Form(None),
-    approval_status: str = Form("APPROVED"),
+    approval_status: str = Form(None),  # accepted but ignored - see below
     version: str = Form("1.0"),
     review_date: str = Form(None),
     db: Session = Depends(get_db),
@@ -212,65 +211,34 @@ def upload_knowledge_action(
         except ValueError:
             pass
 
-    _ = get_project_for_org(db, project_id, org_id)
+    project = get_project_for_org(db, project_id, org_id)
 
-    from app.services.extractor import validate_uploaded_file
+    from app.services.document_ingestion import ingest_uploaded_document
 
-    validate_uploaded_file(file, settings.MAX_UPLOAD_SIZE)
-
-    storage_dir = Path(settings.LOCAL_STORAGE_PATH) / "documents"
-    storage_dir.mkdir(parents=True, exist_ok=True)
-
-    doc_id = uuid.uuid4()
-    ext = Path(file.filename or "").suffix.lower()
-    file_path = storage_dir / f"{doc_id}{ext}"
-
-    with file_path.open("wb") as buffer:
-        import shutil
-
-        shutil.copyfileobj(file.file, buffer)
-
-    doc = Document(
-        id=doc_id,
-        project_id=project_id,
-        name=file.filename or "Knowledge Document",
-        file_path=str(file_path),
-        file_type=file.content_type or "application/octet-stream",
-        doc_role="knowledge_base",
-        processing_status="pending",  # Starts as pending
-        owner_name=owner_name,
-        tags=tags,
-        approval_status=approval_status,
-        version=version,
-        review_date=parsed_review_date,
-        created_by_id=user_id,
-    )
-    db.add(doc)
-    db.commit()
-    db.refresh(doc)
-
-    from app.services.project_service import log_audit_event
-
-    log_audit_event(
-        db,
-        org_id=org_id,
-        user_id=user_id,
-        action="knowledge_upload",
-        entity_type="Document",
-        entity_id=doc.id,
-        details={"name": doc.name, "approval_status": doc.approval_status},
-    )
-
-    from app.core.queue import enqueue_job
-
-    enqueue_job(
-        db=db,
-        org_id=org_id,
-        project_id=project_id,
-        document_id=doc.id,
-        job_type="document_processing",
-        user_id=user_id,
-    )
+    try:
+        ingest_uploaded_document(
+            db,
+            project=project,
+            org_id=org_id,
+            user_id=user_id,
+            upload=file,
+            doc_role="knowledge_base",
+            # approval_status is intentionally NOT taken from client input;
+            # every new knowledge document starts PENDING regardless of
+            # what the form submitted, and can only become APPROVED via
+            # an explicit reviewer action after ingestion_status reaches
+            # COMPLETED (enforced separately, not yet wired in A5b).
+            approval_status="PENDING",
+            owner_name=owner_name,
+            tags=tags,
+            version=version,
+            review_date=parsed_review_date,
+        )
+    except HTTPException as e:
+        db.rollback()
+        return RedirectResponse(
+            url=f"/projects/{project_id}?error={e.detail}", status_code=303
+        )
 
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
 

@@ -10,11 +10,18 @@ from app.models.document import Document, DocumentPage
 from app.models.job import ProcessingJob
 from app.models.project import ProposalProject
 from app.models.requirement import Requirement
+from app.services.ingestion_state import IngestionStatus
 from tests.integration.test_csrf import extract_csrf_token
 
 
-def test_upload_creates_job_with_queue_enabled(client, db, monkeypatch):
-    """Proves uploading an RFP creates a ProcessingJob and sets status to pending."""
+def test_upload_never_creates_legacy_job_even_with_queue_enabled(
+    client, db, monkeypatch
+):
+    """A5b: RFP uploads route through quarantine-first ingestion and stop
+    at SCANNING/REJECTED_TYPE - no legacy document_processing job is ever
+    enqueued, even when QUEUE_ENABLED=True. This supersedes the pre-A5b
+    behavior where uploading synchronously created and ran a
+    ProcessingJob."""
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "QUEUE_ENABLED", True)
@@ -40,7 +47,7 @@ def test_upload_creates_job_with_queue_enabled(client, db, monkeypatch):
     csrf_token = extract_csrf_token(response_get.text)
 
     # Perform upload (don't follow redirects to check 303)
-    pdf_content = b"%PDF-1.4 mock content"
+    pdf_content = b"%PDF-1.4\n" + b"x" * 200 + b"\n%%EOF"
     response = client.post(
         f"/projects/{proj.id}/upload",
         data={"csrf_token": csrf_token},
@@ -50,20 +57,19 @@ def test_upload_creates_job_with_queue_enabled(client, db, monkeypatch):
 
     assert response.status_code == 303
 
-    # Check Document status
+    # Check Document status: quarantine-first ingestion, not the legacy
+    # pending/processing/completed pipeline.
     doc = db.scalar(
         select(Document).where(
             Document.project_id == proj.id, Document.doc_role == "rfp"
         )
     )
     assert doc is not None
-    assert doc.processing_status == "pending"
+    assert doc.ingestion_status == IngestionStatus.SCANNING
 
-    # Check ProcessingJob status
+    # No legacy ProcessingJob is created by the upload route anymore.
     job = db.scalar(select(ProcessingJob).where(ProcessingJob.document_id == doc.id))
-    assert job is not None
-    assert job.status == "QUEUED"
-    assert job.progress_percent == 0
+    assert job is None
 
 
 def test_job_idempotency_prevents_duplication(client, db, monkeypatch):

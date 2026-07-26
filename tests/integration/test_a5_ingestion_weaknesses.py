@@ -94,6 +94,14 @@ class TestStorageAndLifecycleGaps:
     """Items 4-9: unscanned files enter normal storage immediately; no
     quarantine lifecycle, hash, detected-type, or scan-state fields exist."""
 
+    @pytest.mark.skip(
+        reason="fixed in A5b: uploads now stream into quarantine storage "
+        "first (app.services.quarantine_storage) and are gated through "
+        "the ingestion state machine (QUARANTINED -> VALIDATING -> "
+        "SCANNING/REJECTED_TYPE) before any write to the normal "
+        "LOCAL_STORAGE_PATH tree or any processing job is created - see "
+        "app.services.document_ingestion.ingest_uploaded_document"
+    )
     def test_item4_and_5_unscanned_upload_lands_in_normal_storage_as_processable(
         self, client, db
     ) -> None:

@@ -1,4 +1,3 @@
-import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +11,16 @@ from app.core.config import settings
 from app.models.audit import AuditEvent
 from app.models.document import Document, DocumentPage
 from app.models.project import ProposalProject
-from app.services.extractor import extract_pages, validate_uploaded_file
+from app.services.extractor import extract_pages
+from app.services.ingestion_state import IngestionStatus
+
+_TERMINAL_REJECTED_STATUSES = frozenset(
+    {
+        IngestionStatus.REJECTED_TYPE,
+        IngestionStatus.REJECTED_MALWARE,
+        IngestionStatus.REJECTED_CONTENT_POLICY,
+    }
+)
 
 
 def log_audit_event(
@@ -64,12 +72,19 @@ def get_project(
 
 
 def get_project_document(db: Session, project_id: uuid.UUID) -> Document | None:
-    """Retrieve the RFP document for a project if it exists."""
-    return db.scalars(
-        select(Document).where(
-            Document.project_id == project_id, Document.doc_role == "rfp"
-        )
-    ).first()
+    """Retrieve the current active RFP document for a project, if one
+    exists. "Active" means not in a terminal rejection state - a project
+    may have multiple historical rejected-type RFP rows, but at most one
+    active (non-terminally-rejected) row at a time."""
+    candidates = db.scalars(
+        select(Document)
+        .where(Document.project_id == project_id, Document.doc_role == "rfp")
+        .order_by(Document.created_at.desc())
+    ).all()
+    for doc in candidates:
+        if doc.ingestion_status not in _TERMINAL_REJECTED_STATUSES:
+            return doc
+    return None
 
 
 def create_project(
@@ -113,71 +128,42 @@ def upload_rfp_document(
     file: UploadFile,
     background_tasks: BackgroundTasks | None = None,
 ) -> Document:
-    """Validate and upload an RFP document for a project, then queue text extraction."""
-    # 1. Fetch project
+    """Stream an RFP upload into quarantine and run independent
+    candidate-type detection. Stops at ingestion_status SCANNING or
+    REJECTED_TYPE - no malware scan, parsing, or requirement extraction
+    happens here (A5c+)."""
     proj = get_project(db, project_id, org_id)
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # 2. Check if project already has an RFP
-    existing_rfp = get_project_document(db, project_id)
-    if existing_rfp:
+    # Row-lock existing RFP rows for this project to prevent two
+    # concurrent uploads both observing "no active RFP" and both
+    # succeeding. SQLite (test/dev) does not support FOR UPDATE row
+    # locks; guard accordingly.
+    query = select(Document).where(
+        Document.project_id == project_id, Document.doc_role == "rfp"
+    )
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        query = query.with_for_update()
+    existing = db.scalars(query).all()
+    active_existing = [
+        d for d in existing if d.ingestion_status not in _TERMINAL_REJECTED_STATUSES
+    ]
+    if active_existing:
         raise HTTPException(
-            status_code=400, detail="Project already has an RFP document"
+            status_code=400, detail="Project already has an active RFP document"
         )
 
-    # 3. Validate file
-    validate_uploaded_file(file, settings.MAX_UPLOAD_SIZE)
+    from app.services.document_ingestion import ingest_uploaded_document
 
-    # 4. Save file locally
-    storage_dir = Path(settings.LOCAL_STORAGE_PATH) / "documents"
-    storage_dir.mkdir(parents=True, exist_ok=True)
-
-    doc_id = uuid.uuid4()
-    ext = Path(file.filename or "").suffix.lower()
-    file_path = storage_dir / f"{doc_id}{ext}"
-
-    with file_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    # 5. Create Document record
-    doc = Document(
-        id=doc_id,
-        project_id=project_id,
-        name=file.filename or "RFP Document",
-        file_path=str(file_path),
-        file_type=file.content_type or "application/octet-stream",
-        doc_role="rfp",
-        processing_status="pending",  # Starts as pending
-        created_by_id=user_id,
-    )
-    db.add(doc)
-    db.commit()
-    db.refresh(doc)
-
-    log_audit_event(
+    return ingest_uploaded_document(
         db,
+        project=proj,
         org_id=org_id,
         user_id=user_id,
-        action="document_upload",
-        entity_type="Document",
-        entity_id=doc.id,
-        details={"name": doc.name, "role": doc.doc_role},
+        upload=file,
+        doc_role="rfp",
     )
-
-    # 6. Queue background extraction task via enqueue_job
-    from app.core.queue import enqueue_job
-
-    enqueue_job(
-        db=db,
-        org_id=org_id,
-        project_id=project_id,
-        document_id=doc.id,
-        job_type="document_processing",
-        user_id=user_id,
-    )
-
-    return doc
 
 
 def process_document_background(
