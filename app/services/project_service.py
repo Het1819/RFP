@@ -71,6 +71,18 @@ def get_project(
     ).first()
 
 
+def _first_active_rfp(candidates: list[Document]) -> Document | None:
+    """Return the first document in `candidates` that is not in a terminal
+    rejection state, or None if all candidates are terminally rejected (or
+    the list is empty). Shared by get_project_document (which needs the
+    active document itself) and upload_rfp_document (which only needs to
+    know whether one exists)."""
+    for doc in candidates:
+        if doc.ingestion_status not in _TERMINAL_REJECTED_STATUSES:
+            return doc
+    return None
+
+
 def get_project_document(db: Session, project_id: uuid.UUID) -> Document | None:
     """Retrieve the current active RFP document for a project, if one
     exists. "Active" means not in a terminal rejection state - a project
@@ -81,10 +93,7 @@ def get_project_document(db: Session, project_id: uuid.UUID) -> Document | None:
         .where(Document.project_id == project_id, Document.doc_role == "rfp")
         .order_by(Document.created_at.desc())
     ).all()
-    for doc in candidates:
-        if doc.ingestion_status not in _TERMINAL_REJECTED_STATUSES:
-            return doc
-    return None
+    return _first_active_rfp(list(candidates))
 
 
 def create_project(
@@ -136,20 +145,28 @@ def upload_rfp_document(
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # Row-lock existing RFP rows for this project to prevent two
-    # concurrent uploads both observing "no active RFP" and both
-    # succeeding. SQLite (test/dev) does not support FOR UPDATE row
-    # locks; guard accordingly.
-    query = select(Document).where(
-        Document.project_id == project_id, Document.doc_role == "rfp"
-    )
+    # Lock the parent ProposalProject row (not the Document rows) to
+    # serialize concurrent uploads for this project. Locking Document rows
+    # via SELECT ... FOR UPDATE is a no-op on a project's FIRST-ever RFP
+    # upload, because there are zero existing rows to lock - two concurrent
+    # first-uploads would both observe "no active RFP" and both succeed.
+    # Locking the always-present parent project row instead means both
+    # concurrent requests serialize on it regardless of whether any
+    # Document rows exist yet. SQLite (test/dev) does not support FOR
+    # UPDATE row locks; guard accordingly.
     if db.bind is not None and db.bind.dialect.name == "postgresql":
-        query = query.with_for_update()
-    existing = db.scalars(query).all()
-    active_existing = [
-        d for d in existing if d.ingestion_status not in _TERMINAL_REJECTED_STATUSES
-    ]
-    if active_existing:
+        db.execute(
+            select(ProposalProject)
+            .where(ProposalProject.id == project_id)
+            .with_for_update()
+        )
+
+    existing = db.scalars(
+        select(Document).where(
+            Document.project_id == project_id, Document.doc_role == "rfp"
+        )
+    ).all()
+    if _first_active_rfp(list(existing)) is not None:
         raise HTTPException(
             status_code=400, detail="Project already has an active RFP document"
         )

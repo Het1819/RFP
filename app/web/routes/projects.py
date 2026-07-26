@@ -25,6 +25,7 @@ from app.core.security import get_project_for_org
 from app.core.templates import templates
 from app.models.document import Document
 from app.services import project_service
+from app.services.ingestion_state import IngestionStatus
 
 logger = logging.getLogger(__name__)
 
@@ -150,10 +151,14 @@ def upload_rfp_action(
         return RedirectResponse(
             url=f"/projects/{project_id}?error={e.detail}", status_code=303
         )
-    except Exception as e:
+    except Exception:
         db.rollback()
         return RedirectResponse(
-            url=f"/projects/{project_id}?error={e!s}", status_code=303
+            url=(
+                f"/projects/{project_id}?error="
+                "An unexpected error occurred while processing the upload."
+            ),
+            status_code=303,
         )
 
     return RedirectResponse(url=f"/projects/{project_id}", status_code=303)
@@ -266,6 +271,15 @@ def retry_document_processing_action(
     )
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    if doc.ingestion_status != IngestionStatus.CLEAN:
+        return RedirectResponse(
+            url=(
+                f"/projects/{project_id}?error="
+                "Document is not eligible for reprocessing"
+            ),
+            status_code=303,
+        )
 
     doc.processing_status = "pending"
     doc.processing_error = None

@@ -284,6 +284,87 @@ def test_foreign_org_validation_for_jobs_and_retry(client, db, monkeypatch):
     assert response_retry.status_code == 404
 
 
+def test_retry_route_rejects_non_clean_document(client, db):
+    """The retry route must never re-enqueue a document whose
+    ingestion_status is not CLEAN - a quarantined/scanning/rejected
+    document reaching the legacy pipeline here would only be stopped by
+    process_job_pipeline_async's fail-closed backstop, so the route itself
+    must refuse up front instead of relying solely on that backstop."""
+    org_id, user_id = get_default_org_and_user(db)
+    proj = ProposalProject(
+        organization_id=org_id,
+        created_by_id=user_id,
+        name="Retry Guard Project",
+        client_name="Retry Guard Client",
+    )
+    db.add(proj)
+    db.commit()
+
+    doc = Document(
+        project_id=proj.id,
+        name="quarantined.pdf",
+        file_path="mock_path.pdf",
+        file_type="application/pdf",
+        doc_role="rfp",
+        processing_status="failed",
+        ingestion_status=IngestionStatus.QUARANTINED,
+        created_by_id=user_id,
+    )
+    db.add(doc)
+    db.commit()
+
+    response = client.post(
+        f"/projects/{proj.id}/documents/{doc.id}/retry", follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert "error=" in response.headers["location"]
+
+    assert db.query(ProcessingJob).count() == 0
+    db.refresh(doc)
+    # The route must bail out before mutating processing_status/error.
+    assert doc.processing_status == "failed"
+
+
+def test_retry_route_allows_clean_document(client, db):
+    """Sanity check for the guard added above: a CLEAN document must still
+    be retriable through the same route."""
+    org_id, user_id = get_default_org_and_user(db)
+    proj = ProposalProject(
+        organization_id=org_id,
+        created_by_id=user_id,
+        name="Retry Allowed Project",
+        client_name="Retry Allowed Client",
+    )
+    db.add(proj)
+    db.commit()
+
+    doc = Document(
+        project_id=proj.id,
+        name="clean.pdf",
+        file_path="mock_path.pdf",
+        file_type="application/pdf",
+        doc_role="rfp",
+        processing_status="failed",
+        ingestion_status=IngestionStatus.CLEAN,
+        created_by_id=user_id,
+    )
+    db.add(doc)
+    db.commit()
+
+    response = client.post(
+        f"/projects/{proj.id}/documents/{doc.id}/retry", follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert "error=" not in response.headers["location"]
+
+    # With QUEUE_ENABLED=false the job pipeline runs synchronously inline
+    # within the request, so by the time the response comes back
+    # processing_status has already moved past "pending" (and the job will
+    # fail against the fake mock_path.pdf) - that's irrelevant here. The
+    # signal that matters is that the guard did not block enqueueing.
+    assert db.query(ProcessingJob).count() == 1
+
+
 def test_redis_url_enforcement_in_production(monkeypatch):
     """Proves that a production environment requires REDIS_URL when queue is enabled."""
     # Test setting validation

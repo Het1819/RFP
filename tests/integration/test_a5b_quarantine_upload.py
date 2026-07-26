@@ -114,6 +114,61 @@ class TestRfpUploadRoute:
         assert db.query(ProcessingJob).count() == 0
 
 
+class TestRfpUploadRowLock:
+    def test_first_upload_locks_parent_project_row_on_postgresql(
+        self, db, org_project_user, monkeypatch
+    ) -> None:
+        """A fully concurrent-transaction test isn't feasible under SQLite
+        (it has no real row-level FOR UPDATE semantics), so this documents
+        and verifies the PostgreSQL-only code path instead: on a project's
+        FIRST-ever RFP upload there are zero existing Document rows, so a
+        lock scoped to the Document query result set is a no-op (the
+        original bug this fixes). The lock must instead target the
+        always-present parent ProposalProject row, acquired before the
+        Document query, so two concurrent first-uploads serialize on it
+        regardless of whether any Document rows exist yet."""
+        import io
+
+        from fastapi import UploadFile
+        from starlette.datastructures import Headers
+
+        from app.models.project import ProposalProject
+        from app.services import project_service
+
+        org, project, user = org_project_user
+        assert db.bind is not None
+        # Force the PostgreSQL-only locking branch even though the test
+        # engine is SQLite; SQLite silently ignores FOR UPDATE at compile
+        # time, so the statement can still execute for inspection.
+        monkeypatch.setattr(db.bind.dialect, "name", "postgresql")
+
+        executed_statements = []
+        original_execute = db.execute
+
+        def spy_execute(statement, *args, **kwargs):
+            executed_statements.append(statement)
+            return original_execute(statement, *args, **kwargs)
+
+        monkeypatch.setattr(db, "execute", spy_execute)
+
+        upload = UploadFile(
+            filename="rfp.pdf",
+            file=io.BytesIO(_pdf_bytes()),
+            headers=Headers({"content-type": "application/pdf"}),
+        )
+        project_service.upload_rfp_document(db, project.id, org.id, user.id, upload)
+
+        lock_statements = [
+            s
+            for s in executed_statements
+            if "FOR UPDATE" in str(s) and ProposalProject.__tablename__ in str(s)
+        ]
+        assert lock_statements, (
+            "expected a SELECT ... FOR UPDATE against the ProposalProject "
+            "table before the Document query"
+        )
+
+
 class TestKnowledgeUploadRoute:
     def test_valid_docx_reaches_scanning(self, client, db, org_project_user) -> None:
         _org, project, _user = org_project_user
