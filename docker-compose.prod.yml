@@ -85,6 +85,7 @@ services:
       ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
       STORAGE_BACKEND: local
       LOCAL_STORAGE_PATH: /data/storage
+      QUARANTINE_STORAGE_PATH: /data/quarantine
       SESSION_COOKIE_NAME: __Host-rfp_session
       TRUSTED_PROXY_IPS: ${NGINX_BACKEND_IP:-172.28.0.10}
       ALLOWED_HOSTS: ${NGINX_SERVER_NAME:-localhost}
@@ -105,6 +106,12 @@ services:
       - anthropic_api_key
     volumes:
       - app_storage:/data/storage
+      # Quarantine storage is mounted into `app` ONLY (not `worker`,
+      # `nginx`, `postgres`, or `redis`) -- `worker` has no
+      # security-processing stage implemented yet in this phase (A5b), so
+      # it must never gain filesystem access to unscanned, untrusted
+      # uploads. Revisit once a worker-side scanning stage exists.
+      - quarantine_storage:/data/quarantine
     depends_on:
       postgres:
         condition: service_healthy
@@ -253,6 +260,7 @@ volumes:
   postgres_data:
   redis_data:
   app_storage:
+  quarantine_storage:
 
 secrets:
   app_secret:
