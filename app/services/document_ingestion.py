@@ -168,9 +168,7 @@ def _run_detection(
     extension, or return None if the extension is not one we can classify
     at all (neither .pdf nor .docx)."""
     if declared_extension == ".pdf":
-        return detect_pdf_candidate(
-            storage_path, declared_extension=declared_extension
-        )
+        return detect_pdf_candidate(storage_path, declared_extension=declared_extension)
     if declared_extension == ".docx":
         return detect_docx_candidate(
             storage_path, declared_extension=declared_extension
