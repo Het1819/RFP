@@ -26,6 +26,7 @@ marker, reused rather than duplicated).
 import re
 import struct
 import zipfile
+import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -67,7 +68,7 @@ _NESTED_ARCHIVE_EXTENSIONS = (
 _DRIVE_OR_UNC_RE = re.compile(r"^[A-Za-z]:[\\/]|^\\\\")
 
 _EXTERNAL_RELATIONSHIP_RE = re.compile(
-    rb'<Relationship\b[^>]*\bTargetMode\s*=\s*"External"', re.IGNORECASE
+    rb"""<Relationship\b[^>]*\bTargetMode\s*=\s*(["'])External\1""", re.IGNORECASE
 )
 
 
@@ -173,7 +174,7 @@ def check_docx_content_policy(file_path: Path) -> DocxPolicyResult:
                     content_types_bytes = _read_member_bounded(
                         zf, _CONTENT_TYPES_PART, _MAX_INSPECTED_XML_BYTES
                     )
-                except (ValueError, KeyError, zipfile.BadZipFile):
+                except (ValueError, KeyError, zipfile.BadZipFile, zlib.error, EOFError):
                     return _rejected("DOCX_MALFORMED_PACKAGE")
                 try:
                     _hardened_parse(content_types_bytes)
@@ -195,7 +196,7 @@ def check_docx_content_policy(file_path: Path) -> DocxPolicyResult:
                 try:
                     with zf.open(name) as member:
                         header = member.read(len(_OLE_MAGIC))
-                except (zipfile.BadZipFile, OSError):
+                except (zipfile.BadZipFile, OSError, zlib.error, EOFError):
                     return _rejected("DOCX_MALFORMED_PACKAGE")
                 if header == _OLE_MAGIC:
                     return _rejected("DOCX_OLE_PRESENT")
@@ -205,7 +206,7 @@ def check_docx_content_policy(file_path: Path) -> DocxPolicyResult:
                     rels_bytes = _read_member_bounded(
                         zf, _DOCUMENT_RELS_PART, _MAX_INSPECTED_XML_BYTES
                     )
-                except (ValueError, KeyError, zipfile.BadZipFile):
+                except (ValueError, KeyError, zipfile.BadZipFile, zlib.error, EOFError):
                     return _rejected("DOCX_MALFORMED_PACKAGE")
                 try:
                     _hardened_parse(rels_bytes)
@@ -214,10 +215,13 @@ def check_docx_content_policy(file_path: Path) -> DocxPolicyResult:
                 if _EXTERNAL_RELATIONSHIP_RE.search(rels_bytes):
                     return _rejected("DOCX_EXTERNAL_RELATIONSHIP")
 
-    except (zipfile.BadZipFile, OSError):
-        # OSError also covers a missing/unreadable file path: this
-        # function must fail closed (rejected, not an unhandled
-        # exception) for any input that cannot be opened as a ZIP.
+    except (zipfile.BadZipFile, OSError, zlib.error, EOFError):
+        # OSError also covers a missing/unreadable file path. zlib.error /
+        # EOFError are a backstop for corrupted-compressed-data failures
+        # that should already be caught at each individual bounded-read
+        # call site above; kept here too so this function fails closed
+        # (rejected, not an unhandled exception) for any input that
+        # cannot be safely opened or read as a ZIP.
         return _rejected("DOCX_MALFORMED_PACKAGE")
 
     return DocxPolicyResult(

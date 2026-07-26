@@ -1,3 +1,4 @@
+import struct
 import zipfile
 from pathlib import Path
 
@@ -68,6 +69,31 @@ def _build_minimal_docx(
     return path
 
 
+def _corrupt_member_compressed_data(path: Path, member_name: str) -> None:
+    """Flip bytes in ``member_name``'s DEFLATE-compressed data in place.
+
+    Leaves the ZIP central directory (and therefore the member's declared
+    ``file_size``/``compress_size``/CRC metadata) untouched, so the
+    corruption is only discoverable by actually decompressing the member --
+    exactly the "central directory intact, compressed bytes corrupted"
+    scenario that triggers a raw ``zlib.error`` if a caller only guards
+    against ``zipfile.BadZipFile``/``OSError``.
+    """
+    with zipfile.ZipFile(path) as zf:
+        info = zf.getinfo(member_name)
+    raw = bytearray(path.read_bytes())
+    local_header_fixed_size = 30
+    name_len = len(member_name.encode())
+    extra_len = struct.unpack(
+        "<H", raw[info.header_offset + 28 : info.header_offset + 30]
+    )[0]
+    data_start = info.header_offset + local_header_fixed_size + name_len + extra_len
+    data_end = min(data_start + info.compress_size, data_start + 16)
+    for i in range(data_start, data_end):
+        raw[i] ^= 0xFF
+    path.write_bytes(bytes(raw))
+
+
 class TestCheckDocxContentPolicy:
     def test_clean_minimal_docx_passes(self, tmp_path: Path) -> None:
         path = _build_minimal_docx(tmp_path)
@@ -117,6 +143,53 @@ class TestCheckDocxContentPolicy:
         )
         result = check_docx_content_policy(path)
         assert result.passed is True
+
+    def test_corrupted_embedded_member_compressed_data_fails_safely(
+        self, tmp_path: Path
+    ) -> None:
+        """A member whose central-directory entry is intact but whose
+        DEFLATE-compressed bytes are corrupted must be rejected with
+        DOCX_MALFORMED_PACKAGE, not raise an unhandled zlib.error."""
+        member_name = "word/embeddings/oleObject1.bin"
+        path = _build_minimal_docx(
+            tmp_path,
+            extra_members={member_name: _OLE_MAGIC + b"\x00" * 512},
+        )
+        _corrupt_member_compressed_data(path, member_name)
+        result = check_docx_content_policy(path)
+        assert result.passed is False
+        assert result.reason_code == "DOCX_MALFORMED_PACKAGE"
+
+    def test_corrupted_document_rels_compressed_data_fails_safely(
+        self, tmp_path: Path
+    ) -> None:
+        """Same corruption scenario against the bounded-XML-member read
+        path (word/_rels/document.xml.rels) must also fail closed."""
+        member_name = "word/_rels/document.xml.rels"
+        path = _build_minimal_docx(
+            tmp_path,
+            extra_members={member_name: _DOCUMENT_RELS_XML.encode() * 20},
+        )
+        _corrupt_member_compressed_data(path, member_name)
+        result = check_docx_content_policy(path)
+        assert result.passed is False
+        assert result.reason_code == "DOCX_MALFORMED_PACKAGE"
+
+    def test_external_relationship_single_quoted_target_mode_fails(
+        self, tmp_path: Path
+    ) -> None:
+        single_quoted_rels = _DOCUMENT_RELS_EXTERNAL_XML.replace(
+            'TargetMode="External"', "TargetMode='External'"
+        )
+        path = _build_minimal_docx(
+            tmp_path,
+            extra_members={
+                "word/_rels/document.xml.rels": single_quoted_rels.encode()
+            },
+        )
+        result = check_docx_content_policy(path)
+        assert result.passed is False
+        assert result.reason_code == "DOCX_EXTERNAL_RELATIONSHIP"
 
     def test_external_relationship_fails(self, tmp_path: Path) -> None:
         path = _build_minimal_docx(
