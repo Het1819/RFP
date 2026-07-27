@@ -4,14 +4,15 @@ This operational checklist must be fully executed and signed off prior to packag
 
 > **Canonical Release Specification:**
 > Refer to [docs/release/A6_CONTROLLED_RELEASE_GATE.md](file:///D:/RFA/Project/rfp-architect-mvp/docs/release/A6_CONTROLLED_RELEASE_GATE.md) for full gate criteria, required evidence, approval states, and stop conditions.
+> Candidate-specific evidence details (candidate SHA, CI run ID, SBOM SHA-256) are recorded in the external A6.3 release-evidence package.
 
 ---
 
 ## 1. Branch, SHA, & CI Verification
 
-- [ ] **Immutable Source SHA:** Confirm release target is `main` at commit `4cdee3ba27d853f4158b78f9a57ec4bfdc5b6d21`.
+- [ ] **Candidate Source SHA:** Record operator-filled candidate SHA in the A6.3 evidence package and verify equality: recorded candidate SHA == origin/main SHA == CI head SHA.
 - [ ] **Working Tree & PR Status:** Confirm clean working tree (`git status --porcelain=v1` clean) and 0 open pull requests.
-- [ ] **CI Status:** Confirm all 7 GitHub Actions checks passed at target SHA (`ai-evals`, `backend-quality`, `docker-build`, `edge-security`, `frontend-quality`, `release-gate`, `security-scan`).
+- [ ] **CI Status & Run ID:** Confirm all 7 GitHub Actions checks passed at recorded candidate SHA; log CI run ID and CycloneDX SBOM digest in evidence package.
 - [ ] **Secret Audit:** Ensure zero production passwords, API keys, or raw secrets exist in repository code or logs.
 - [ ] **Container & Dependency Scanning:** `pip-audit`, `npm audit`, Gitleaks, and Trivy report 0 high/critical vulnerabilities.
 
@@ -47,7 +48,7 @@ This operational checklist must be fully executed and signed off prior to packag
 
 ## 5. Formal Approval Sign-off
 
-- **Engineering Lead Sign-off:** _________________ Date: _______________
-- **Security Officer Sign-off:** _________________ Date: _______________
-- **Product Manager Sign-off:** _________________ Date: _______________
+- **Engineering Lead Sign-off:** _________________ Date: _______________ (or PENDING)
+- **Security Officer Sign-off:** _________________ Date: _______________ (or PENDING)
+- **Product Manager Sign-off:** _________________ Date: _______________ (or PENDING)
 - **Release Decision:** **[ BLOCKED / READY FOR RELEASE-CANDIDATE REVIEW / APPROVED FOR PACKAGING ]**
