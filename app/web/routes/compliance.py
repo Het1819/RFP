@@ -17,10 +17,21 @@ from app.core.security import (
     ReviewerAuthorizationError,
     get_project_for_org,
     get_requirement_for_org,
+    require_requirement_reviewer,
 )
 from app.core.templates import templates
 from app.models.audit import AuditEvent
 from app.models.comment import RequirementComment
+from app.models.extraction import (
+    CANDIDATE_STATUS_PROPOSED,
+    MAX_REVIEWER_COMMENT_LEN,
+    MAX_REVIEWER_EDITED_TEXT_LEN,
+    REVIEW_TASK_STATUS_OPEN,
+    CandidateReviewTask,
+    ExtractionRun,
+    RequirementCandidate,
+)
+from app.models.project import ProposalProject
 from app.models.requirement import Requirement
 from app.models.user import User
 from app.services.candidate_review import (
@@ -1206,6 +1217,192 @@ def add_comment_action(
 # id, provenance, or source-candidate linkage is bindable from a form field.
 
 
+# Bounded rendering limits. Evidence is quoted from an untrusted document, so
+# the queue shows an excerpt rather than an unbounded block; the detail page
+# shows the full slice a reviewer must actually read to make the decision.
+CANDIDATE_QUEUE_PAGE_SIZE = 25
+CANDIDATE_EVIDENCE_EXCERPT_CHARS = 300
+
+
+def _require_reviewer(request: Request, db: Session) -> tuple[uuid.UUID, User]:
+    """Resolve the session identity and enforce the reviewer capability.
+
+    Runs before any candidate is read, so a caller without the capability
+    cannot use these pages to learn whether candidates exist -- not their
+    count, not their projects, not their ids.
+    """
+    org_id, user_id = get_current_org_and_user(request, db)
+    reviewer = require_requirement_reviewer(db, user_id, org_id)
+    return org_id, reviewer
+
+
+def _open_candidate_query(org_id: uuid.UUID) -> Any:
+    """Open review work for one organization, oldest first.
+
+    Joined against CandidateReviewTask rather than filtered on candidate status
+    alone: a task that was completed or superseded is not open work, even if
+    something later reopened the candidate. Both sides are tenant-filtered so a
+    mismatch cannot widen the result set.
+    """
+    return (
+        select(RequirementCandidate, CandidateReviewTask)
+        .join(
+            CandidateReviewTask,
+            CandidateReviewTask.candidate_id == RequirementCandidate.id,
+        )
+        .where(
+            RequirementCandidate.organization_id == org_id,
+            CandidateReviewTask.organization_id == org_id,
+            RequirementCandidate.candidate_status == CANDIDATE_STATUS_PROPOSED,
+            CandidateReviewTask.status == REVIEW_TASK_STATUS_OPEN,
+        )
+        .order_by(RequirementCandidate.created_at.asc(), RequirementCandidate.id.asc())
+    )
+
+
+def _excerpt(text: str, limit: int = CANDIDATE_EVIDENCE_EXCERPT_CHARS) -> str:
+    collapsed = " ".join((text or "").split())
+    if len(collapsed) <= limit:
+        return collapsed
+    return collapsed[:limit].rstrip() + "…"
+
+
+@router.get("/compliance/requirement-candidates", response_class=HTMLResponse)
+def requirement_candidate_queue(
+    request: Request,
+    page: int = 1,
+    project_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> Any:
+    """Reviewer queue: open candidate review tasks for this organization."""
+    org_id, reviewer = _require_reviewer(request, db)
+
+    query = _open_candidate_query(org_id)
+
+    # Optional project filter, validated against the caller's organization so a
+    # foreign project id filters to nothing rather than leaking its existence.
+    selected_project: uuid.UUID | None = None
+    if project_id:
+        try:
+            candidate_project = uuid.UUID(project_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid project id") from None
+        owned = db.scalar(
+            select(ProposalProject.id).where(
+                ProposalProject.id == candidate_project,
+                ProposalProject.organization_id == org_id,
+            )
+        )
+        if owned is None:
+            raise HTTPException(status_code=404, detail="Not found")
+        selected_project = owned
+        query = query.where(RequirementCandidate.project_id == selected_project)
+
+    page = max(1, page)
+    offset = (page - 1) * CANDIDATE_QUEUE_PAGE_SIZE
+    # Fetch one extra row to detect a next page without a second count query,
+    # which would also have to be tenant-scoped to avoid leaking totals.
+    rows = list(db.execute(query.offset(offset).limit(CANDIDATE_QUEUE_PAGE_SIZE + 1)))
+    has_next = len(rows) > CANDIDATE_QUEUE_PAGE_SIZE
+    rows = rows[:CANDIDATE_QUEUE_PAGE_SIZE]
+
+    project_names = {
+        row.id: row.name
+        for row in db.execute(
+            select(ProposalProject.id, ProposalProject.name).where(
+                ProposalProject.organization_id == org_id
+            )
+        )
+    }
+
+    items = [
+        {
+            "candidate_id": candidate.id,
+            "project_id": candidate.project_id,
+            "project_name": project_names.get(candidate.project_id, "—"),
+            "requirement_text": candidate.normalized_requirement_text,
+            "evidence_excerpt": _excerpt(candidate.evidence_text),
+            "unit_kind": candidate.unit_kind,
+            "source_locator": candidate.source_locator,
+            "requirement_type": candidate.requirement_type,
+            "confidence": candidate.confidence,
+            "created_at": candidate.created_at,
+        }
+        for candidate, _task in rows
+    ]
+
+    projects = sorted(project_names.items(), key=lambda pair: pair[1])
+
+    return templates.TemplateResponse(
+        request=request,
+        name="compliance/candidate_queue.html",
+        context={
+            "items": items,
+            "page": page,
+            "has_next": has_next,
+            "has_prev": page > 1,
+            "projects": projects,
+            "selected_project_id": str(selected_project) if selected_project else "",
+            "reviewer_name": reviewer.full_name,
+            "notice": request.query_params.get("notice"),
+        },
+    )
+
+
+@router.get(
+    "/compliance/requirement-candidates/{candidate_id}", response_class=HTMLResponse
+)
+def requirement_candidate_detail(
+    candidate_id: uuid.UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Any:
+    """Candidate detail: immutable evidence plus the three review actions."""
+    org_id, _reviewer = _require_reviewer(request, db)
+
+    candidate = db.scalar(
+        select(RequirementCandidate).where(
+            RequirementCandidate.id == candidate_id,
+            RequirementCandidate.organization_id == org_id,
+        )
+    )
+    if candidate is None:
+        # Same response for "absent" and "another tenant's".
+        raise HTTPException(status_code=404, detail="Not found")
+
+    task = db.scalar(
+        select(CandidateReviewTask).where(
+            CandidateReviewTask.candidate_id == candidate.id,
+            CandidateReviewTask.organization_id == org_id,
+        )
+    )
+    project = db.get(ProposalProject, candidate.project_id)
+    run = db.get(ExtractionRun, candidate.extraction_run_id)
+
+    promoted = db.scalar(
+        select(Requirement).where(Requirement.source_candidate_id == candidate.id)
+    )
+
+    return templates.TemplateResponse(
+        request=request,
+        name="compliance/candidate_detail.html",
+        context={
+            "candidate": candidate,
+            "task": task,
+            "project_name": project.name if project else "—",
+            # Version metadata is safe: identifiers, not prompt or model output.
+            "prompt_version": run.prompt_version if run else None,
+            "schema_version": candidate.extraction_schema_version,
+            "provider": run.provider if run else None,
+            "model": run.model if run else None,
+            "is_open": candidate.candidate_status == CANDIDATE_STATUS_PROPOSED,
+            "promoted_requirement_id": promoted.id if promoted else None,
+            "max_edit_len": MAX_REVIEWER_EDITED_TEXT_LEN,
+            "max_comment_len": MAX_REVIEWER_COMMENT_LEN,
+        },
+    )
+
+
 def _candidate_review_response(
     request: Request, result: CandidateReviewResult
 ) -> Response:
@@ -1219,7 +1416,12 @@ def _candidate_review_response(
             ),
             status_code=200,
         )
-    return RedirectResponse(url="/projects", status_code=303)
+    # Back to the queue: the reviewed candidate has left it, so the next item
+    # is already at the top.
+    return RedirectResponse(
+        url="/compliance/requirement-candidates?notice=review_recorded",
+        status_code=303,
+    )
 
 
 def _review_candidate_action(
