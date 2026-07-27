@@ -33,25 +33,32 @@ The repository includes a comprehensive CI pipeline in `.github/workflows/ci.yml
 
 ---
 
-## 3. Creating a Release
+## 3. Release Workflows & Option A Controlled Gate
 
-Releases are triggered automatically when a tag matching the pattern `pilot-hardening-step*` is pushed.
+For full release gate specifications, approval states, and stop conditions, refer to the canonical gate document:
+[docs/release/A6_CONTROLLED_RELEASE_GATE.md](file:///D:/RFA/Project/rfp-architect-mvp/docs/release/A6_CONTROLLED_RELEASE_GATE.md)
 
-### Release Procedure
-1. Create and push a tag from the verified branch:
-   ```bash
-   git tag -a pilot-hardening-step12 -m "Release Step 12: CI/CD Quality Gates"
-   git push origin pilot-hardening-step12
-   ```
-2. The `Release Workflow` (`.github/workflows/release.yml`) will verify all quality gates, compile the production Docker image, generate an SBOM, compile release notes, and upload the build artifacts to GitHub Releases.
+
+### Release Paths
+
+#### Path A: Historical Automated Tag Path
+- **Trigger**: Tag matching pattern `pilot-hardening-step*` pushed to remote.
+- **Behavior**: GitHub Actions `.github/workflows/release.yml` builds release assets and creates a GitHub Release.
+- **Operational Risk Control**: Do **not** push `pilot-hardening-step*` tags to `main` for Option A releases to prevent unintended automated asset publishing.
+
+#### Path B: Controlled Option A Release-Candidate Path
+- **Source**: `main` at exact immutable commit `4cdee3ba27d853f4158b78f9a57ec4bfdc5b6d21`.
+- **Pre-conditions**: Clean working tree, 0 open PRs, full regression (`make check`) passing, 7-service Docker topology verified.
+- **Release Assets**: Verified `sbom.json` and `SHA256SUMS` manifest.
+- **Release Settings**: Published strictly as **Draft** and **Pre-release** (not latest).
+- **Deployment Separation**: Creating a release candidate packaging asset DOES NOT perform VPS or production deployment. Formal deployment requires separate written authorization.
 
 ---
 
 ## 4. Final Release Validation
 
-Before submitting a pull request to merge a hardening branch, developers must run the automated final validation script. This ensures all linting, formatting, type checking, unit/integration tests, and Docker compose configurations pass cleanly.
+Before submitting a pull request or approving a release candidate, run the automated final validation script to verify quality gates:
 
-### Running Validation:
 ```powershell
 # Run validation on Windows PowerShell (skips docker build for speed if desired)
 powershell -ExecutionPolicy Bypass -File scripts/final_release_validation.ps1 -SkipDockerBuild
@@ -64,25 +71,10 @@ powershell -ExecutionPolicy Bypass -File scripts/final_release_validation.ps1 -S
 
 ## 5. Rollback and Recovery Guidance
 
-If a production/pilot deployment experiences severe failure, roll back to a previously tagged stable commit.
+If a pilot or production release encounters a critical defect, follow the rollback procedures detailed in [RUNBOOK.md](file:///D:/RFA/Project/rfp-architect-mvp/RUNBOOK.md):
 
-### Deployment Rollback
-Identify the last stable pilot release tag:
-- **`pilot-hardening-step11`**: Stables logging correlation, Prometheus metrics, and Pilot KPI dashboard.
-- **`pilot-hardening-step12`**: Stables CI/CD validation, supply chain scanning, and local check helpers.
-- **`pilot-hardening-step13`**: Stables staging deployment rehearsal, smoke tests, rollback drills, and pilot readiness checklist.
-- **`pilot-hardening-step14`**: Stables pilot onboarding materials, feedback capture routes, and exit criteria.
-- **`pilot-hardening-step15`**: Stables commercial package, pricing scorecard, objection guide, and conversion criteria.
-- **`pilot-hardening-step16`**: Stables outreach sales templates, CRM stages, and email sequences.
-- **`pilot-hardening-step17`**: Stables first-campaign account trackers, research worksheets, meeting evidence capture, and weekly reporting templates.
-
-To roll back, deploy the corresponding container image tag or check out the tag locally and rebuild:
-```bash
-git checkout pilot-hardening-step17
-docker build -t rfp-architect-mvp:pilot .
-# Redeploy containers
-```
-
-For comprehensive step-by-step procedures regarding database schema downgrades, asset preservation, and incident response, consult the [RUNBOOK.md](file:///D:/RFA/Project/rfp-architect-mvp/RUNBOOK.md).
+1. **Database Schema**: Execute `alembic downgrade -1` or target revision to roll back migrations safely before application code downgrade.
+2. **Container Application**: Roll back deployment target to the last known stable container image tag or commit.
+3. **Session Revocation**: Execute `uv run python scripts/revoke_user_sessions.py --all` if session state invalidation is required.
 
 

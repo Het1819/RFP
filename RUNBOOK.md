@@ -52,26 +52,21 @@ Inspect the running app version metadata or execute git checks:
 git describe --tags --always
 ```
 
-### Step 2.2: Determine Rollback Target Tag
-Select a stable step tag from the following list of verified points:
-- **`pilot-hardening-step12`**: Current stable (CI/CD gates, supply-chain checks, local test runner).
-- **`pilot-hardening-step11`**: Production observability, Prometheus metrics, structured logs, KPI dashboard.
-- **`pilot-hardening-step10`**: Redis queue-backed worker processing.
-- **`pilot-hardening-step9`**: Human review workflow and export approval gating.
+### Step 2.2: Determine Rollback Target
+Select a verified commit SHA on `main` (e.g., Option A baseline `4cdee3ba27d853f4158b78f9a57ec4bfdc5b6d21` or designated previous stable SHA).
 
 ### Step 2.3: Revert Code & Rebuild Container
-Check out the stable tag and rebuild the pilot image:
-```bash
-# Check out stable tag
-git checkout pilot-hardening-step12
+1. Execute database schema downgrade if needed:
+   ```bash
+   uv run alembic downgrade -1
+   ```
+2. Check out the target commit SHA and rebuild/redeploy container stack:
+   ```bash
+   git checkout <target-commit-sha>
+   docker compose -f docker-compose.prod.yml down
+   docker compose -f docker-compose.prod.yml up -d
+   ```
 
-# Rebuild container image
-docker build -t rfp-architect-mvp:pilot .
-
-# Redeploy container stack
-docker compose -f docker-compose.prod.yml down
-docker compose -f docker-compose.prod.yml up -d
-```
 
 ### Step 2.4: Database Migration Rollback Policy
 If the failed version introduced new migrations, rollback the database schema:

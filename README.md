@@ -221,39 +221,46 @@ store can't be reached. `/healthz` stays up without Redis (pure liveness).
 session store and reports `503` if it fails, independent of database
 health.
 
-### Remaining limitations (still not production-ready)
+### Current Release Limitations
 
-- production Compose credentials and fake-LLM configuration are unresolved;
-- TLS termination and reverse-proxy hardening (including trusted-proxy-aware
-  `X-Forwarded-For` handling for throttling) are not implemented;
-- no multi-factor authentication (MFA) or enterprise OIDC/SSO;
-- no isolation guarantees against hostile uploaded documents beyond basic
-  validation;
-- no evidence-backed customer-facing security documentation;
-- password reset / self-service account recovery is not implemented;
-- Redis data is **not** encrypted at rest or guaranteed encrypted in
-  transit — do not assume TLS to Redis unless you have configured and
-  verified it yourself.
+- No multi-factor authentication (MFA) or self-service password recovery;
+- TLS certificate issued for local/pilot validation (self-signed); requires CA-signed cert for public domain deployment;
+- Requirement extraction LLM provider disabled by default; requires explicit enablement;
+- Human approval mandatory for all requirement candidate promotion; zero automated proposal submission;
+- Database schema changes require explicit Alembic migrations before cutover.
 
-## RFP Upload Workflow (Slice 2)
+## RFP Ingestion & Processing Pipeline (Phase A5)
 
-### 1. Launch dev server
-Ensure PostgreSQL database is running, then run the FastAPI server:
-```bash
-make dev
+### 1. Document Upload Lifecycle
+
+Uploaded PDF and DOCX files progress through an explicit 8-stage state machine:
+
+```text
+QUARANTINED
+  -> VALIDATING (MIME & extension inspection)
+  -> SCANNING (ClamAV malware & content policy check)
+  -> CLEAN_PENDING_PROMOTION (Scanning passed, awaiting promotion)
+  -> PROMOTING (Promoting file to clean storage)
+  -> CLEAN (File in clean storage)
+  -> PARSING (Worker delegating to isolated parser container)
+  -> COMPLETED (Page text & metadata extracted)
 ```
 
-### 2. Navigate to projects list
-Go to `http://127.0.0.1:8000/projects` to list and create proposal projects.
+If malware or a content-policy violation is detected during `SCANNING`, the document immediately transitions to `REJECTED_MALWARE` or `REJECTED_POLICY` and is purged from quarantine storage.
 
-### 3. Open project detail
-Click on a project to enter its workspace.
+### 2. Isolated Security Boundaries
 
-### 4. Upload RFP document
-Upload exactly one PDF or DOCX file. Once uploaded:
-- The system validates file size (Max 10MB), MIME type, extension, and content.
-- A background task extracts page-by-page text.
-- Live progress is displayed via HTMX polling.
+- **Quarantine Storage**: Uploads write strictly to `/data/quarantine`. Web app writes; worker reads read-only.
+- **ClamAV Service**: Runs in a private container with no published ports and no storage/DB access.
+- **Parser Container**: Executes in an isolated container on `parser_net` bridge network (`internal: true`). Has no database, Redis, storage mounts, or LLM credentials. Communication occurs strictly over HTTP from the background worker.
+
+## Governed Requirement Extraction & Human Review (Phase A5f)
+
+1. **Extraction Trigger**: Once a document reaches `COMPLETED`, an `ExtractionRun` analyzes the extracted `DocumentPage` text.
+2. **Candidate Generation**: The system produces `RequirementCandidate` records in `PROPOSED` status.
+3. **Review Task Routing**: `CandidateReviewTask` items route candidate requirements to reviewers.
+4. **Authorized Human Approval**: Only users with reviewer capability (`user.can_review_requirements = True`, provisioned via operator CLI) can approve or edit candidates. Ordinary users receive HTTP 403.
+5. **Authoritative Requirement Creation**: Exact, authoritative `Requirement` entities are created only upon human approval.
 
 ## Compliance Matrix Workflow (Slice 3)
 1. Navigate to **Compliance Matrix** from project detail page.
