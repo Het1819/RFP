@@ -1,19 +1,23 @@
-# Production-like Docker Compose stack (Phases A3 + A4).
+# Production-like Docker Compose stack (Phases A3 + A4 + A5c).
 #
 # Topology:
 #   Internet/host --(80/443 only)--> nginx --(backend network)--> app:8000
 #                                                                    |
-#                                                          postgres, redis, worker
+#                                                    postgres, redis, worker
+#                                                                    |
+#                                                                  clamd
 #
 # nginx is the ONLY service with published host ports. app/worker/postgres/
-# redis join only the private "backend" network and are unreachable from
-# the host or the public internet. See DEPLOYMENT.md for the full edge
+# redis/clamd join only the private "backend" network and are unreachable
+# from the host or the public internet. See DEPLOYMENT.md for the full edge
 # threat model.
 #
 # All application/database/Redis/Anthropic secrets are Docker Compose
 # file-based secrets read from ./secrets/ (gitignored; never committed).
 # nginx receives ONLY its TLS certificate/key -- never any application,
-# database, Redis, or Anthropic secret.
+# database, Redis, or Anthropic secret. `clamd` receives NO secrets at all
+# (see the `clamd` service below); only `worker` talks to it, over the
+# network.
 #
 # Generate local validation secrets with:
 #   uv run python scripts/generate_local_prod_secrets.py
@@ -85,6 +89,7 @@ services:
       ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
       STORAGE_BACKEND: local
       LOCAL_STORAGE_PATH: /data/storage
+      QUARANTINE_STORAGE_PATH: /data/quarantine
       SESSION_COOKIE_NAME: __Host-rfp_session
       TRUSTED_PROXY_IPS: ${NGINX_BACKEND_IP:-172.28.0.10}
       ALLOWED_HOSTS: ${NGINX_SERVER_NAME:-localhost}
@@ -105,10 +110,26 @@ services:
       - anthropic_api_key
     volumes:
       - app_storage:/data/storage
+      # Quarantine storage is mounted into `app` (read-write, so it can
+      # write newly-uploaded files) and into `worker` (read-only, see the
+      # `worker` service below) -- never into `nginx`, `postgres`, or
+      # `redis`. As of A5c, `worker` runs the malware/content-policy
+      # scanning stage and needs to read quarantined files to scan them;
+      # it must never be able to write into quarantine storage.
+      - quarantine_storage:/data/quarantine
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      # `app` never talks to clamd directly (only `worker` does), but its
+      # own /readyz reports clamd connectivity (see DEPLOYMENT.md "9b.
+      # Malware Scanning" for why /readyz intentionally couples to
+      # scanner health). Without this, cold start is racy: nginx's
+      # depends_on app:service_healthy could pass/fail before clamd
+      # finishes its up-to-90s first-run signature download, purely by
+      # timing, since nothing ordered app's startup against clamd's.
+      clamd:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/readyz"]
@@ -129,6 +150,7 @@ services:
     command: ["arq", "app.worker.WorkerSettings"]
     networks:
       - backend
+      - parser_net
     environment:
       APP_ENV: production
       # AUTH_MODE/session/throttle/trusted-proxy config is not functionally
@@ -153,6 +175,18 @@ services:
       ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
       STORAGE_BACKEND: local
       LOCAL_STORAGE_PATH: /data/storage
+      # QUARANTINE_STORAGE_PATH: as of A5c, the worker mounts
+      # quarantine_storage read-only (see `volumes:` below) and reads
+      # quarantined files from this path to run malware/content-policy
+      # scanning. It must match the mount target below.
+      QUARANTINE_STORAGE_PATH: /data/quarantine
+      # CLAMAV_*: the worker is the only service that talks to `clamd`
+      # (over the network, via INSTREAM -- it never gets a filesystem
+      # mount of clamd's signature database). CLAMAV_HOST points at the
+      # `clamd` service name on the backend network; the remaining
+      # CLAMAV_* settings use application defaults (see app/core/config.py)
+      # and are not overridden here.
+      CLAMAV_HOST: clamd
       SESSION_COOKIE_NAME: __Host-rfp_session
       TRUSTED_PROXY_IPS: ${NGINX_BACKEND_IP:-172.28.0.10}
       ALLOWED_HOSTS: ${NGINX_SERVER_NAME:-localhost}
@@ -173,10 +207,16 @@ services:
       - anthropic_api_key
     volumes:
       - app_storage:/data/storage
+      # Read-only: worker only ever reads quarantined files to scan them,
+      # never writes into quarantine storage. See the `app` service's
+      # quarantine-mount comment above for the read/write split rationale.
+      - quarantine_storage:/data/quarantine:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      clamd:
         condition: service_healthy
     # NOTE (worker readiness limitation): arq has no built-in HTTP
     # endpoint, so there is no real readiness probe here -- Docker can only
@@ -184,6 +224,38 @@ services:
     # Redis and processing jobs. Verify with `docker compose logs worker`
     # and by checking that queued jobs transition out of QUEUED. A real
     # worker health signal is a recommended follow-up.
+    restart: on-failure:3
+
+  parser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.parser_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      PYTHONPATH: /app
+    networks:
+      - parser_net
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    user: "10001:10001"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: on-failure:3
 
   postgres:
@@ -233,6 +305,31 @@ services:
     # No `ports:` -- Redis is reachable only from other containers on the
     # backend network, never from the host or the public internet.
 
+  clamd:
+    image: clamav/clamav@sha256:e7ead98e7e07231b151bce988e0cfb0a3b46e6e7046d9dd44fd838c0df724a03
+    # clamav/clamav:1.4, resolved 2026-07-26 via `docker pull clamav/clamav:1.4`.
+    # ClamAV 1.4.5 at resolution time (freshclam updates signatures inside
+    # the running container on its own schedule; the pinned image tag is
+    # the engine version, not the signature database version -- see
+    # DEPLOYMENT.md for the signature-staleness policy this depends on).
+    networks:
+      - backend
+    volumes:
+      - clamav_signatures:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s  # freshclam's first signature download can take a while
+    security_opt:
+      - no-new-privileges:true
+    restart: on-failure:3
+    # No `ports:`, no `secrets:`, no application/session/DB/Redis/Anthropic
+    # env vars -- clamd receives only bytes over the backend network (via
+    # INSTREAM, from `worker`) and never a filesystem mount of quarantine
+    # or app storage.
+
 networks:
   # Faces the host's published ports (nginx only). Not joined by app,
   # worker, postgres, or redis.
@@ -248,11 +345,19 @@ networks:
     ipam:
       config:
         - subnet: ${BACKEND_SUBNET:-172.28.0.0/24}
+  # Isolated internal network shared strictly between worker and parser.
+  # Has no internet gateway (internal: true) and is not joined by app, nginx,
+  # postgres, or redis.
+  parser_net:
+    driver: bridge
+    internal: true
 
 volumes:
   postgres_data:
   redis_data:
   app_storage:
+  quarantine_storage:
+  clamav_signatures:
 
 secrets:
   app_secret:

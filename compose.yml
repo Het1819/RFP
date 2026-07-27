@@ -25,5 +25,24 @@ services:
       timeout: 5s
       retries: 20
 
+  # Local clamd for manual/pytest use against a real daemon. Dev doesn't
+  # run `app`/`worker` in Compose, so there's no healthcheck-gated
+  # depends_on here -- just point CLAMAV_HOST=localhost (and
+  # CLAMAV_PORT=3310) at this from a locally-run app/worker process or
+  # pytest run.
+  clamd:
+    image: clamav/clamav@sha256:e7ead98e7e07231b151bce988e0cfb0a3b46e6e7046d9dd44fd838c0df724a03
+    ports:
+      - "3310:3310"
+    volumes:
+      - clamav_signatures:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
 volumes:
   postgres_data:
+  clamav_signatures:

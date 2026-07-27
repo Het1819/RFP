@@ -18,6 +18,7 @@ _VALID_PROD_BASE = {
     "ANTHROPIC_API_KEY": "sk-ant-real-key",
     "LLM_MODEL": "claude-sonnet-4-6",
     "STORAGE_BACKEND": "local",
+    "QUARANTINE_STORAGE_PATH": "/data/quarantine",
     "TRUSTED_PROXY_IPS": "172.28.0.10",
     "ALLOWED_HOSTS": "rfp.example.com",
     "PUBLIC_BASE_URL": "https://rfp.example.com",
@@ -40,6 +41,15 @@ def test_absolute_mounted_storage_path_accepted():
     assert s.LOCAL_STORAGE_PATH == "/data/storage"
 
 
+@pytest.mark.skip(
+    reason="superseded in A5b: uploads no longer write into "
+    "settings.LOCAL_STORAGE_PATH at all - project_service.upload_rfp_document "
+    "now delegates to app.services.document_ingestion.ingest_uploaded_document, "
+    "which streams into settings.QUARANTINE_STORAGE_PATH and stops at "
+    "SCANNING/REJECTED_TYPE. The app/worker storage-location convergence "
+    "this test guards will apply again once a later A5 phase implements "
+    "promotion of CLEAN documents out of quarantine into LOCAL_STORAGE_PATH."
+)
 def test_app_and_worker_read_the_same_settings_field():
     """Both app.services.project_service (used by the app's HTTP routes)
     and app.worker's process_document_task (via

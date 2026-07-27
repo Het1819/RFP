@@ -18,6 +18,7 @@ from app.core.observability import (
     request_id_var,
     setup_logging,
 )
+from app.core.readiness import check_clamav_connectivity, check_quarantine_storage
 from app.core.sessions.clock import SystemClock
 from app.core.sessions.middleware import ServerSessionMiddleware
 from app.core.sessions.store import RedisSessionStore, SessionStoreUnavailableError
@@ -177,6 +178,20 @@ async def readiness_check(
             raise HTTPException(
                 status_code=503, detail="Session store not ready"
             ) from e
+
+    quarantine_result = check_quarantine_storage()
+    if not quarantine_result.healthy:
+        logging.getLogger(__name__).error(
+            f"Readiness check failed: {quarantine_result.detail}"
+        )
+        raise HTTPException(status_code=503, detail="Quarantine storage not ready")
+
+    scanner_result = check_clamav_connectivity()
+    if not scanner_result.healthy:
+        logging.getLogger(__name__).error(
+            f"Readiness check failed: {scanner_result.detail}"
+        )
+        raise HTTPException(status_code=503, detail="Scanner not ready")
 
     return {"status": "ready"}
 
