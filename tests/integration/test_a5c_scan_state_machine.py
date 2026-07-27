@@ -169,7 +169,12 @@ class TestCleanPdfFullLifecycle:
         self, db, org_project_user, tmp_path, monkeypatch
     ) -> None:
         org, project, user = org_project_user
-        monkeypatch.setattr(settings, "QUARANTINE_STORAGE_PATH", str(tmp_path))
+        monkeypatch.setattr(
+            settings, "QUARANTINE_STORAGE_PATH", str(tmp_path / "quarantine")
+        )
+        monkeypatch.setattr(settings, "LOCAL_STORAGE_PATH", str(tmp_path / "clean"))
+        (tmp_path / "quarantine").mkdir(exist_ok=True)
+        (tmp_path / "clean").mkdir(exist_ok=True)
 
         upload = _upload(_clean_pdf_bytes(), "clean.pdf", "application/pdf")
 
@@ -183,7 +188,7 @@ class TestCleanPdfFullLifecycle:
         )
 
         db.refresh(doc)
-        assert doc.ingestion_status == IngestionStatus.CLEAN_PENDING_PROMOTION
+        assert doc.ingestion_status == IngestionStatus.CLEAN
 
         # Every intermediate scan-metadata column populated.
         assert doc.scan_started_at is not None
@@ -195,12 +200,13 @@ class TestCleanPdfFullLifecycle:
         assert doc.content_policy_version is not None
 
         # AuditEvent trail: QUARANTINED->VALIDATING->SCANNING->
-        # CLEAN_PENDING_PROMOTION, none leaking the raw filename/path.
+        # CLEAN_PENDING_PROMOTION->PROMOTING->CLEAN, none leaking the raw filename/path.
         events = _last_transition_audit_events(db, doc.id)
-        assert len(events) >= 3
+        assert len(events) >= 4
         to_statuses = [e.details["to"] for e in events]
         assert IngestionStatus.SCANNING in to_statuses
         assert IngestionStatus.CLEAN_PENDING_PROMOTION in to_statuses
+        assert IngestionStatus.CLEAN in to_statuses
         for event in events:
             serialized = str(event.details)
             assert "clean.pdf" not in serialized

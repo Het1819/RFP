@@ -17,6 +17,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.24@sha256:99ea34acedc870ba4ad11a1f540a1c04
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV UV_HTTP_TIMEOUT=120
 # --locked: fail the build if uv.lock and pyproject.toml disagree, instead
 # of silently re-resolving. --no-dev: never install the dev dependency
 # group into the runtime image. --no-install-project: only install

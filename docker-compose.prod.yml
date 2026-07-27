@@ -150,6 +150,7 @@ services:
     command: ["arq", "app.worker.WorkerSettings"]
     networks:
       - backend
+      - parser_net
     environment:
       APP_ENV: production
       # AUTH_MODE/session/throttle/trusted-proxy config is not functionally
@@ -223,6 +224,38 @@ services:
     # Redis and processing jobs. Verify with `docker compose logs worker`
     # and by checking that queued jobs transition out of QUEUED. A real
     # worker health signal is a recommended follow-up.
+    restart: on-failure:3
+
+  parser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.parser_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      PYTHONPATH: /app
+    networks:
+      - parser_net
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    user: "10001:10001"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: on-failure:3
 
   postgres:
@@ -312,6 +345,12 @@ networks:
     ipam:
       config:
         - subnet: ${BACKEND_SUBNET:-172.28.0.0/24}
+  # Isolated internal network shared strictly between worker and parser.
+  # Has no internet gateway (internal: true) and is not joined by app, nginx,
+  # postgres, or redis.
+  parser_net:
+    driver: bridge
+    internal: true
 
 volumes:
   postgres_data:
