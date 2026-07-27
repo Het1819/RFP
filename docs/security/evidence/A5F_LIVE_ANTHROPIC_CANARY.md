@@ -102,6 +102,34 @@ This run is therefore the first to exercise schema conformance and
 prompt-injection resistance by actual model outcome rather than by failing
 early.
 
+## Known limitations carried forward
+
+These are accepted, non-blocking limitations of the shipped A5f workflow. They
+are recorded rather than worked around, because each one fails visibly and an
+operator needs to recognise it.
+
+- **Single-run input limit.** A document exceeding the configured source-unit
+  or character ceiling fails closed with `EXTRACTION_INPUT_LIMIT`. It is not
+  truncated: a partial extraction reported as a success would silently drop
+  requirements, which is worse than refusing. The document and its pages are
+  retained and the limit is audited with operator-visible numbers.
+- **Multi-batch extraction is deferred.** There is deliberately no automatic
+  splitting of an over-limit document. Deterministic multi-batch extraction
+  will follow once the single-call path has been measured.
+- **No re-extraction reconciliation.** A later extraction run supersedes
+  untouched `PROPOSED` candidates, but an already-approved `Requirement` is
+  never silently modified or deleted. Reconciling an approved requirement
+  against re-extracted text is an explicit future workflow.
+- **Reviewer capability is organization-wide.** A reviewer may review
+  candidates for any project in their own organization. Project-scoped grants
+  can be layered on if customer evidence requires them.
+- **Capability provisioning is operator-controlled.** Granting requires
+  authorized database and runtime access via the CLI. There is no self-service
+  path, and deliberately no web route by which a user could grant it to
+  themselves.
+- **One synthetic canary is not general assurance.** It does not establish
+  general model accuracy or universal prompt-injection resistance.
+
 ## Residual scope
 
 - Reviewer queue and UI.
