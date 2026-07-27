@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.services.ingestion_state import IngestionStatus
+
 if TYPE_CHECKING:
     from app.models.document import Document, DocumentPage
 
@@ -161,6 +163,11 @@ def validate_evidence_candidate(
         raise EvidenceValidationError(
             status_code=400,
             detail="Document is not approved for use as evidence",
+        )
+    if doc.ingestion_status != IngestionStatus.COMPLETED:
+        raise EvidenceValidationError(
+            status_code=400,
+            detail="Document has not completed security processing",
         )
 
     # 4. Snippet length bounds

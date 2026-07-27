@@ -68,6 +68,100 @@ def get_current_org_and_user(
     return org_id, user_id
 
 
+# Fixed authorization result codes. Logged instead of any user/candidate
+# detail, so an authorization decision never leaks tenant or resource state
+# into logs.
+REVIEW_AUTH_OK = "REVIEW_AUTH_OK"
+REVIEW_AUTH_NO_USER = "REVIEW_AUTH_NO_USER"
+REVIEW_AUTH_INACTIVE = "REVIEW_AUTH_INACTIVE"
+REVIEW_AUTH_TENANT_MISMATCH = "REVIEW_AUTH_TENANT_MISMATCH"
+REVIEW_AUTH_NO_CAPABILITY = "REVIEW_AUTH_NO_CAPABILITY"
+
+
+class ReviewerAuthorizationError(HTTPException):
+    """Authorization failure for a requirement-review action.
+
+    Carries a fixed ``result_code`` for auditing while the HTTP detail stays
+    generic, so callers can record *why* without telling the client.
+    """
+
+    def __init__(self, status_code: int, detail: str, result_code: str) -> None:
+        super().__init__(status_code=status_code, detail=detail)
+        self.result_code = result_code
+
+
+def require_requirement_reviewer(
+    db: Session, user_id: uuid.UUID, org_id: uuid.UUID
+) -> User:
+    """Authorize `user_id` to review requirement candidates within `org_id`.
+
+    This is the single authority boundary for promoting machine-proposed
+    candidates into authoritative Requirements. It is enforced in the service
+    layer, not only in route dependencies, so no future caller (worker, CLI,
+    another service) can reach the promotion path without passing through here.
+
+    A user must be authenticated, active, a member of `org_id`, and explicitly
+    granted `can_review_requirements`. Organization membership alone is not
+    sufficient -- that is the distinction between "can see the project" and
+    "may approve machine output as authoritative".
+
+    Raises ReviewerAuthorizationError: 404 when the user is not a member of
+    `org_id` (non-disclosing, matching get_project_for_org), 401 when the
+    account is missing or deactivated, 403 when the member simply lacks the
+    capability. Never returns a partially-authorized user.
+    """
+    user = db.get(User, user_id)
+    if not user:
+        logger.warning("requirement_review_authorization: %s", REVIEW_AUTH_NO_USER)
+        raise ReviewerAuthorizationError(
+            status_code=401,
+            detail="Authentication required",
+            result_code=REVIEW_AUTH_NO_USER,
+        )
+
+    if not user.is_active:
+        logger.warning(
+            "requirement_review_authorization: %s user_id=%s",
+            REVIEW_AUTH_INACTIVE,
+            user_id,
+        )
+        raise ReviewerAuthorizationError(
+            status_code=401,
+            detail="User account is deactivated or missing",
+            result_code=REVIEW_AUTH_INACTIVE,
+        )
+
+    # Tenant check precedes the capability check so a cross-tenant caller can
+    # never distinguish "wrong org" from "no capability".
+    if user.organization_id != org_id:
+        logger.warning(
+            "requirement_review_authorization: %s user_id=%s org_id=%s",
+            REVIEW_AUTH_TENANT_MISMATCH,
+            user_id,
+            org_id,
+        )
+        raise ReviewerAuthorizationError(
+            status_code=404,
+            detail="Not found",
+            result_code=REVIEW_AUTH_TENANT_MISMATCH,
+        )
+
+    if not user.can_review_requirements:
+        logger.warning(
+            "requirement_review_authorization: %s user_id=%s org_id=%s",
+            REVIEW_AUTH_NO_CAPABILITY,
+            user_id,
+            org_id,
+        )
+        raise ReviewerAuthorizationError(
+            status_code=403,
+            detail="Requirement review is not permitted for this account",
+            result_code=REVIEW_AUTH_NO_CAPABILITY,
+        )
+
+    return user
+
+
 def get_project_for_org(
     db: Session, project_id: uuid.UUID, org_id: uuid.UUID
 ) -> ProposalProject:

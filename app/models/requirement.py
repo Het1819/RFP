@@ -19,6 +19,21 @@ class Requirement(Base):
     source_document_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("documents.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Provenance link back to the reviewed RequirementCandidate this row was
+    # promoted from. Nullable because Requirements created before candidate
+    # extraction (and any created by hand) have no candidate; unique so a
+    # candidate can never yield two authoritative Requirements, enforced by the
+    # database rather than by service discipline.
+    #
+    # Candidate review state deliberately does NOT get mirrored here: the
+    # candidate remains the single source of truth for review status, and the
+    # existence of this row is what "approved" means to Requirement consumers.
+    source_candidate_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("requirement_candidates.id", ondelete="RESTRICT"),
+        nullable=True,
+        unique=True,
+        index=True,
+    )
     original_text: Mapped[str] = mapped_column(Text, nullable=False)
     source_section: Mapped[str | None] = mapped_column(String(100), nullable=True)
     source_page: Mapped[int | None] = mapped_column(Integer, nullable=True)

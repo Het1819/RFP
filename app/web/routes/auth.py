@@ -7,6 +7,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.client_ip import resolve_client_ip
 from app.core.config import settings
 from app.core.csrf import generate_csrf_token, validate_csrf_token
 from app.core.database import get_db
@@ -48,10 +49,11 @@ def _build_login_throttle(request: Request) -> LoginThrottle:
 
 
 def _source_ip(request: Request) -> str:
-    # Direct ASGI peer address only. Forwarded-For/Real-IP/Forwarded headers
-    # are NOT trusted in this phase -- that belongs to a later
-    # reverse-proxy-aware hardening pass with an explicit trusted-proxy list.
-    return request.client.host if request.client is not None else "unknown"
+    # Centralized trusted-proxy-aware resolution (app.core.client_ip):
+    # forwarded headers are honored only when the direct ASGI peer is the
+    # exact configured Nginx backend IP; otherwise the direct peer address
+    # is used and forwarded headers are ignored entirely.
+    return resolve_client_ip(request, settings.effective_trusted_proxy_ips)
 
 
 @router.get("/login", response_class=HTMLResponse)

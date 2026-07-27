@@ -1,10 +1,12 @@
 import logging
 import secrets
+from pathlib import Path
 from urllib.parse import quote
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.client_ip import parse_trusted_proxy_ips
 from app.core.secrets import read_secret_file
 
 logger = logging.getLogger(__name__)
@@ -89,6 +91,24 @@ class Settings(BaseSettings):
     # to this app (auth handled via IAM/VPC/managed-identity instead).
     REDIS_EXTERNALLY_MANAGED: bool = False
 
+    # --- Edge / reverse-proxy trust (Phase A4) ---
+    # Comma-separated list of EXACT trusted-proxy IPs (never a CIDR range
+    # or wildcard). In the A4 topology this is the Nginx service's
+    # deterministic backend-network IP. See app.core.client_ip.
+    TRUSTED_PROXY_IPS: str | None = None
+    # Comma-separated explicit hostnames this app answers to. No "*", no
+    # empty entries, no localhost/loopback/dev hostnames in production.
+    ALLOWED_HOSTS: str | None = None
+    # Absolute HTTPS URL identifying the public-facing origin. Must agree
+    # with ALLOWED_HOSTS and the Nginx server_name in production.
+    PUBLIC_BASE_URL: str | None = None
+    # Documented escape hatch for LOCAL VALIDATION ONLY: allows "localhost"/
+    # loopback values in ALLOWED_HOSTS and PUBLIC_BASE_URL so the full
+    # production-hardening code path can be exercised against the local
+    # Nginx edge stack without public DNS. Off by default; a real
+    # deployment must never set this.
+    ALLOW_LOOPBACK_HOST: bool = False
+
     # --- Secret files (Phase A3) ---
     # If set, each *_FILE value is read via read_secret_file() and
     # overrides the corresponding field above before any other validation
@@ -108,11 +128,118 @@ class Settings(BaseSettings):
     STORAGE_BACKEND: str = "local"
     LOCAL_STORAGE_PATH: str = "./data"
     MAX_UPLOAD_SIZE: int = 10 * 1024 * 1024  # 10 MB default
+    QUARANTINE_STORAGE_PATH: str = "./data/quarantine"
+    QUARANTINE_CHUNK_SIZE_BYTES: int = 1024 * 1024  # 1 MiB
+    MAX_DISPLAY_FILENAME_LENGTH: int = 255
+    DOCX_DETECTION_MAX_MEMBERS: int = 5000
+    PARSE_MAX_ATTEMPTS: int = 3
+    PARSE_RETRY_BACKOFF_BASE_SECONDS: float = 2.0
+    PARSE_RETRY_BACKOFF_MAX_SECONDS: float = 30.0
+    PARSER_SERVICE_URL: str = "http://parser:8000"
+
+    # --- DOCX content-policy inspection (Phase A5c) ---
+    # Bounds for the zip-bomb defense in app.services.docx_content_policy.
+    # Both are read from ZIP central-directory metadata only (info.file_size
+    # / info.compress_size), never by decompressing member content.
+    # 200 MiB is generously above any realistic legitimate DOCX (typical
+    # proposal/knowledge documents with embedded images run low tens of MB
+    # uncompressed) while still bounding worst-case memory/CPU exposure from
+    # a maliciously crafted package.
+    DOCX_MAX_UNCOMPRESSED_TOTAL_BYTES: int = 200 * 1024 * 1024  # 200 MiB
+    # A 100:1 declared-uncompressed-to-compressed ratio is far beyond what
+    # ordinary XML/text/image content inside a DOCX achieves (typically
+    # single-digit to low double-digit ratios), so this catches classic
+    # zip-bomb-style entries without rejecting genuine documents.
+    DOCX_MAX_COMPRESSION_RATIO: int = 100
+
+    # --- ClamAV malware scanning (Phase A5c) ---
+    # clamd's own daemon-side StreamMaxLength is configured separately in
+    # the clamd deployment; CLAMAV_STREAM_MAX_BYTES is this app's
+    # client-side limit, enforced incrementally while streaming (never by
+    # buffering the whole file) so an oversized upload is rejected before
+    # more than one extra chunk is sent to the daemon.
+    CLAMAV_HOST: str = "clamd"
+    CLAMAV_PORT: int = 3310
+    CLAMAV_CONNECT_TIMEOUT_SECONDS: float = 5.0
+    CLAMAV_IO_TIMEOUT_SECONDS: float = 30.0
+    CLAMAV_STREAM_MAX_BYTES: int = 10 * 1024 * 1024  # must be <= MAX_UPLOAD_SIZE
+    CLAMAV_MAX_SIGNATURE_AGE_HOURS: int = 48
+    # Maximum number of scan attempts (app.services.malware_scan.run_scan
+    # invocations) a document may accumulate before it is left in
+    # SCAN_FAILED as the operator-visible terminal-for-now state instead
+    # of being eligible for a further bounded retry. The retry scheduler
+    # (Task 6, worker wiring: app.services.malware_scan.prepare_scan_attempt,
+    # called from both run_scan_sync and app.worker.scan_document_task) is
+    # what reads this against Document.scan_attempt_count, under the same
+    # row lock run_scan itself uses, to decide whether to re-arm SCANNING
+    # for another attempt; run_scan only records the attempt count and
+    # outcome.
+    SCAN_MAX_ATTEMPTS: int = 3
+    # Bounded-retry backoff for SCAN_FAILED outcomes (Task 6, worker
+    # wiring). enqueue_scan_retry() computes delay = min(base * 2**(attempt
+    # - 1), max) then applies +/-50% jitter. Both the real-queue path
+    # (arq `_defer_by`) and the QUEUE_ENABLED=False sync fallback compute
+    # the same delay value; the sync fallback just does not actually wait
+    # on it (see app.services.malware_scan.run_scan_sync).
+    SCAN_RETRY_BACKOFF_BASE_SECONDS: int = 5
+    SCAN_RETRY_BACKOFF_MAX_SECONDS: int = 300
+    # --- PDF content-policy inspection (Phase A5c) ---
+    # The inspector itself runs in an isolated OS subprocess (see
+    # app.services.pdf_inspector_subprocess) -- these settings bound both
+    # the parent's wall-clock wait for that subprocess and the resource
+    # limits the subprocess applies to itself before opening the
+    # untrusted file. 10s CPU / 512 MiB address space is generous for
+    # parsing PDF structural metadata (no rendering, no text extraction)
+    # while still bounding worst-case resource exposure from a
+    # maliciously crafted file. The wall-clock timeout is kept a little
+    # above the CPU limit to allow for process startup and I/O wait.
+    PDF_INSPECTION_TIMEOUT_SECONDS: float = 15.0
+    PDF_INSPECTOR_CPU_SECONDS: int = 10
+    PDF_INSPECTOR_MEMORY_BYTES: int = 512 * 1024 * 1024  # 512 MiB
+
     LLM_PROVIDER: str = "fake"
     ANTHROPIC_API_KEY: str = ""
     LLM_MODEL: str = ""
     ENABLE_LLM_TELEMETRY: bool = True
     ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: bool = False
+
+    # --- Requirement candidate extraction (A5f Pass 2B1) ---
+    # Provider selection is a deployment decision, never a request parameter:
+    # nothing reachable from HTTP may choose the provider, the model, or the
+    # prompt. "disabled" is the default so a deployment that has not made an
+    # explicit choice extracts nothing rather than silently calling a model.
+    REQUIREMENT_EXTRACTOR_PROVIDER: str = "disabled"
+    # Model, prompt version, and schema version come from trusted settings.
+    REQUIREMENT_EXTRACTOR_MODEL: str = "claude-opus-5"
+    # `temperature`/`top_p`/`top_k` are rejected by current Claude models, so
+    # none are sent. Effort is NOT a replacement for them: it is a bounded
+    # cost and latency control, not a determinism control. Response shape is
+    # constrained by strict structured output, and provenance is enforced by
+    # the downstream span/evidence/hash checks -- not by this setting.
+    REQUIREMENT_EXTRACTOR_EFFORT: str = "low"
+
+    # Hard input bounds. A document over either limit fails closed rather than
+    # being silently truncated -- a truncated extraction looks successful while
+    # silently dropping requirements, which is the worst outcome for a
+    # compliance matrix.
+    REQUIREMENT_EXTRACTION_MAX_SOURCE_UNITS: int = 200
+    REQUIREMENT_EXTRACTION_MAX_INPUT_CHARS: int = 400_000
+
+    # Hard output bounds.
+    REQUIREMENT_EXTRACTION_MAX_OUTPUT_TOKENS: int = 8192
+    REQUIREMENT_EXTRACTION_MAX_CANDIDATES: int = 500
+    # One provider call per run in this pass; multi-batch extraction is
+    # deliberately deferred until the single-call path has been measured.
+    REQUIREMENT_EXTRACTION_MAX_PROVIDER_CALLS: int = 1
+
+    REQUIREMENT_EXTRACTION_CONNECT_TIMEOUT_SECONDS: float = 10.0
+    REQUIREMENT_EXTRACTION_TIMEOUT_SECONDS: float = 120.0
+    REQUIREMENT_EXTRACTION_MAX_RETRIES: int = 2
+    REQUIREMENT_EXTRACTION_RETRY_BASE_SECONDS: float = 1.0
+    REQUIREMENT_EXTRACTION_RETRY_MAX_SECONDS: float = 20.0
+    # Caches only the stable trusted prefix (policy + schema), never tenant
+    # source content.
+    REQUIREMENT_EXTRACTION_PROMPT_CACHE_ENABLED: bool = True
 
     # --- Server-side session store (Phase A2) ---
     # Falls back to REDIS_URL when unset; see `effective_session_redis_url`.
@@ -188,6 +315,16 @@ class Settings(BaseSettings):
         return self.SESSION_REDIS_URL or self.effective_redis_url
 
     @property
+    def effective_trusted_proxy_ips(self) -> frozenset[str]:
+        return parse_trusted_proxy_ips(self.TRUSTED_PROXY_IPS)
+
+    @property
+    def allowed_hosts_list(self) -> list[str]:
+        if not self.ALLOWED_HOSTS:
+            return []
+        return [h.strip() for h in self.ALLOWED_HOSTS.split(",") if h.strip()]
+
+    @property
     def effective_login_throttle_secret(self) -> str:
         return (
             self.LOGIN_THROTTLE_SECRET
@@ -226,6 +363,75 @@ class Settings(BaseSettings):
                 "SESSION_IDLE_TIMEOUT_SECONDS must be shorter than "
                 "SESSION_ABSOLUTE_TIMEOUT_SECONDS"
             )
+        return self
+
+    @model_validator(mode="after")
+    def validate_clamav_config(self) -> "Settings":
+        # Structural invariant enforced in every environment (not just
+        # production): a client-side scan-stream limit greater than the
+        # upload limit is always a misconfiguration -- no upload can ever
+        # exceed MAX_UPLOAD_SIZE, so a larger CLAMAV_STREAM_MAX_BYTES would
+        # be dead configuration masking a real bug.
+        if self.CLAMAV_STREAM_MAX_BYTES > self.MAX_UPLOAD_SIZE:
+            raise ValueError("CLAMAV_STREAM_MAX_BYTES must not exceed MAX_UPLOAD_SIZE")
+        return self
+
+    @model_validator(mode="after")
+    def validate_requirement_extractor_config(self) -> "Settings":
+        """Fail closed on an unusable or unsafe extractor configuration.
+
+        Validated at startup rather than at first extraction so a
+        misconfigured deployment is caught before a document reaches the
+        worker, and never falls back from one provider to another.
+        """
+        provider = self.REQUIREMENT_EXTRACTOR_PROVIDER
+        if provider not in ("disabled", "fixture", "anthropic"):
+            raise ValueError(
+                "REQUIREMENT_EXTRACTOR_PROVIDER must be one of "
+                "'disabled', 'fixture', 'anthropic'"
+            )
+
+        if provider == "fixture" and self.APP_ENV not in (
+            "development",
+            "local",
+            "test",
+        ):
+            raise ValueError(
+                "REQUIREMENT_EXTRACTOR_PROVIDER='fixture' is only permitted in "
+                "development, local, or test environments"
+            )
+
+        if provider == "anthropic":
+            # The key is required only when the provider is explicitly enabled,
+            # so a deployment that never turns extraction on never needs one.
+            if not self.ANTHROPIC_API_KEY or self.ANTHROPIC_API_KEY == _PLACEHOLDER:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY_FILE) must be set "
+                    "when REQUIREMENT_EXTRACTOR_PROVIDER='anthropic'"
+                )
+            if not self.REQUIREMENT_EXTRACTOR_MODEL.strip():
+                raise ValueError(
+                    "REQUIREMENT_EXTRACTOR_MODEL must be set when "
+                    "REQUIREMENT_EXTRACTOR_PROVIDER='anthropic'"
+                )
+
+        if self.REQUIREMENT_EXTRACTOR_EFFORT not in (
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ):
+            raise ValueError(
+                "REQUIREMENT_EXTRACTOR_EFFORT must be one of "
+                "'low', 'medium', 'high', 'xhigh', 'max'"
+            )
+
+        if self.REQUIREMENT_EXTRACTION_MAX_PROVIDER_CALLS < 1:
+            raise ValueError(
+                "REQUIREMENT_EXTRACTION_MAX_PROVIDER_CALLS must be at least 1"
+            )
+
         return self
 
     @model_validator(mode="after")
@@ -418,10 +624,110 @@ class Settings(BaseSettings):
                     "mounted volume in production-like environments"
                 )
 
-        # 15: cookie name must be explicitly set (never empty/blank).
+        # 15: quarantine storage must be a real, distinct, absolute mounted
+        # path in production-like environments - never the repo-relative
+        # dev default, and never the same directory as clean document
+        # storage (quarantine and clean documents must never share a root).
+        if self.STORAGE_BACKEND == "local":
+            if (
+                self.QUARANTINE_STORAGE_PATH == "./data/quarantine"
+                or not self.QUARANTINE_STORAGE_PATH
+            ):
+                raise ValueError(
+                    "QUARANTINE_STORAGE_PATH must be set to a persistent "
+                    "mounted path (not the './data/quarantine' development "
+                    "default) in production-like environments"
+                )
+            if not self.QUARANTINE_STORAGE_PATH.startswith("/"):
+                raise ValueError(
+                    "QUARANTINE_STORAGE_PATH must be an absolute path to a "
+                    "mounted volume in production-like environments"
+                )
+            if (
+                Path(self.QUARANTINE_STORAGE_PATH).resolve()
+                == Path(self.LOCAL_STORAGE_PATH).resolve()
+            ):
+                raise ValueError(
+                    "QUARANTINE_STORAGE_PATH must differ from "
+                    "LOCAL_STORAGE_PATH - quarantine and clean document "
+                    "storage must be separate directories"
+                )
+
+        # 16: cookie name must be explicitly set (never empty/blank), and in
+        # production must use the `__Host-` prefix. Browsers only accept a
+        # `__Host-` cookie when it also has Secure, Path=/, and no Domain --
+        # ServerSessionMiddleware always sets those three in production
+        # (https_only=True, path="/", no domain param), so requiring the
+        # prefix here is a real behavioral guarantee, not just a name.
         if not self.SESSION_COOKIE_NAME or not self.SESSION_COOKIE_NAME.strip():
             raise ValueError(
                 "SESSION_COOKIE_NAME must not be empty in production-like environments"
+            )
+        if not self.SESSION_COOKIE_NAME.startswith("__Host-"):
+            raise ValueError(
+                "SESSION_COOKIE_NAME must use the '__Host-' prefix in "
+                "production-like environments (requires Secure, Path=/, "
+                "and no Domain -- all of which this app always sets)"
+            )
+
+        # Edge / reverse-proxy trust (Phase A4): fail closed if no exact
+        # trusted proxy is configured -- this app must never guess.
+        try:
+            trusted_ips = self.effective_trusted_proxy_ips
+        except ValueError as exc:
+            raise ValueError(f"TRUSTED_PROXY_IPS is invalid: {exc}") from exc
+        if not trusted_ips:
+            raise ValueError(
+                "TRUSTED_PROXY_IPS must be set to the exact Nginx backend "
+                "IP in production-like environments; forwarded-header "
+                "trust must never be left unconfigured"
+            )
+
+        # ALLOWED_HOSTS: explicit, no wildcard, no empty entries, no
+        # dev/loopback hostnames.
+        hosts = self.allowed_hosts_list
+        if not hosts:
+            raise ValueError(
+                "ALLOWED_HOSTS must be set explicitly in production-like environments"
+            )
+        _forbidden_hosts = {"*", "0.0.0.0", ""}
+        _loopback_hosts = {"localhost", "127.0.0.1", "::1"}
+        if not self.ALLOW_LOOPBACK_HOST:
+            _forbidden_hosts = _forbidden_hosts | _loopback_hosts
+        for host in hosts:
+            if host in _forbidden_hosts:
+                raise ValueError(
+                    f"ALLOWED_HOSTS contains a disallowed value in "
+                    f"production-like environments: {host!r}"
+                )
+
+        # PUBLIC_BASE_URL: absolute HTTPS URL, exact hostname, no
+        # userinfo/fragment/unexpected path, standard port unless explicit.
+        if not self.PUBLIC_BASE_URL:
+            raise ValueError(
+                "PUBLIC_BASE_URL must be set in production-like environments"
+            )
+        from urllib.parse import urlsplit
+
+        parsed = urlsplit(self.PUBLIC_BASE_URL)
+        if parsed.scheme != "https":
+            raise ValueError("PUBLIC_BASE_URL must use the https scheme")
+        if not parsed.hostname:
+            raise ValueError("PUBLIC_BASE_URL must include a hostname")
+        if parsed.username or parsed.password:
+            raise ValueError("PUBLIC_BASE_URL must not contain userinfo")
+        if parsed.fragment:
+            raise ValueError("PUBLIC_BASE_URL must not contain a fragment")
+        if parsed.path not in ("", "/"):
+            raise ValueError("PUBLIC_BASE_URL must not contain a path")
+        if parsed.port is not None and parsed.port != 443:
+            raise ValueError(
+                "PUBLIC_BASE_URL must use the standard HTTPS port (443) "
+                "unless explicitly documented otherwise"
+            )
+        if parsed.hostname not in hosts:
+            raise ValueError(
+                "PUBLIC_BASE_URL hostname must be included in ALLOWED_HOSTS"
             )
 
         return self

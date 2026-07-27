@@ -11,12 +11,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.host_validation import HostValidationMiddleware
 from app.core.observability import (
     SAFE_ID_REGEX,
     MetricsRegistry,
     request_id_var,
     setup_logging,
 )
+from app.core.readiness import check_clamav_connectivity, check_quarantine_storage
 from app.core.sessions.clock import SystemClock
 from app.core.sessions.middleware import ServerSessionMiddleware
 from app.core.sessions.store import RedisSessionStore, SessionStoreUnavailableError
@@ -97,6 +99,12 @@ app.add_middleware(
     https_only=settings.APP_ENV not in ("development", "local", "test"),
 )
 
+# Added last so it becomes the OUTERMOST middleware (Starlette runs the
+# most-recently-added middleware first) -- an invalid Host is rejected
+# before the session middleware ever touches Redis, and before any route
+# or auth dependency runs. No-op when ALLOWED_HOSTS is unset (dev/test).
+app.add_middleware(HostValidationMiddleware, allowed_hosts=settings.allowed_hosts_list)
+
 BASE_DIR = Path(__file__).resolve().parent
 
 # Mount static files
@@ -170,6 +178,20 @@ async def readiness_check(
             raise HTTPException(
                 status_code=503, detail="Session store not ready"
             ) from e
+
+    quarantine_result = check_quarantine_storage()
+    if not quarantine_result.healthy:
+        logging.getLogger(__name__).error(
+            f"Readiness check failed: {quarantine_result.detail}"
+        )
+        raise HTTPException(status_code=503, detail="Quarantine storage not ready")
+
+    scanner_result = check_clamav_connectivity()
+    if not scanner_result.healthy:
+        logging.getLogger(__name__).error(
+            f"Readiness check failed: {scanner_result.detail}"
+        )
+        raise HTTPException(status_code=503, detail="Scanner not ready")
 
     return {"status": "ready"}
 

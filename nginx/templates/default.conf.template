@@ -1,0 +1,136 @@
+# Templated by the base image's docker-entrypoint envsubst step at
+# container start -- ${NGINX_SERVER_NAME} is substituted from the real
+# NGINX_SERVER_NAME environment variable (must match app ALLOWED_HOSTS /
+# PUBLIC_BASE_URL exactly; see DEPLOYMENT.md).
+
+# --- Port 80: redirect-only, plus the ACME HTTP-01 webroot when enabled ---
+server {
+    listen 8080;
+    server_name ${NGINX_SERVER_NAME};
+
+    location = /healthz-edge {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+        access_log off;
+        default_type text/plain;
+        return 200 "ok";
+    }
+
+    # Reserved for a future real ACME HTTP-01 challenge. Not used in A4 --
+    # no public certificate is requested in this phase.
+    location /.well-known/acme-challenge/ {
+        root /usr/share/nginx/html/acme;
+        try_files $uri =404;
+    }
+
+    location / {
+        # Preserves path and query safely; only ever redirects to the
+        # SAME already-validated Host, never an attacker-controlled one --
+        # server_name above already restricts which Host values reach this
+        # block at all.
+        return 308 https://$host$request_uri;
+    }
+}
+
+# Catch-all for any Host that doesn't match the configured server_name:
+# non-informative rejection, never a redirect built from an untrusted Host.
+server {
+    listen 8080 default_server;
+    server_name _;
+    return 444;
+}
+
+# --- Port 443: TLS termination + reverse proxy ---
+server {
+    listen 8443 ssl;
+    http2 on;
+    server_name ${NGINX_SERVER_NAME};
+
+    ssl_certificate     /run/secrets/tls_cert;
+    ssl_certificate_key /run/secrets/tls_key;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_prefer_server_ciphers on;
+    ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 10m;
+    # Disabled rather than left on with a static/unrotated key -- session
+    # tickets are only safe with real key rotation, which is not
+    # implemented in this phase.
+    ssl_session_tickets off;
+
+    # --- Security headers: Nginx is the single source of truth. The
+    # application does not also set these, to avoid duplicate/conflicting
+    # values (see app/main.py). `always` applies them to error responses
+    # (4xx/5xx) too, including ones Nginx generates itself. ---
+    add_header Strict-Transport-Security "max-age=31536000" always;
+    # style-src/font-src keep two narrow, explicitly-named exceptions:
+    # Google Fonts (style-src for the stylesheet link, font-src for the
+    # woff2 files themselves) and 'unsafe-inline' for style-src, because
+    # this app's templates use several hundred inline `style="..."`
+    # attributes across the compliance-matrix UI. Removing all of them is
+    # out of scope for this pass -- see DEPLOYMENT.md for the documented
+    # exception and its rationale. script-src has NO such exception: no
+    # 'unsafe-inline', no 'unsafe-eval', no third-party script origin.
+    # htmx is self-hosted via app/frontend/app.ts (see app/static/dist).
+    add_header Content-Security-Policy "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; connect-src 'self'; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; media-src 'none'; frame-src 'none'; manifest-src 'self'; upgrade-insecure-requests" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Referrer-Policy "no-referrer" always;
+    add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=(), usb=()" always;
+    add_header X-Frame-Options "DENY" always;
+    # Kept at server level for the same reason proxy_common.conf does NOT
+    # set this itself -- see the note there.
+    add_header X-Request-ID $request_id_final always;
+
+    client_max_body_size 11m;
+
+    # Internal/diagnostic endpoints: never reachable at the public edge.
+    # The app's own Docker healthcheck still reaches /readyz directly over
+    # the private backend network, bypassing Nginx entirely.
+    location ~ ^/(metrics|readyz)$ {
+        return 404;
+    }
+
+    location = /healthz-edge {
+        allow 127.0.0.1;
+        allow ::1;
+        deny all;
+        access_log off;
+        default_type text/plain;
+        return 200 "ok";
+    }
+
+    location /login {
+        limit_req zone=login_zone burst=5 nodelay;
+        limit_conn conn_zone 20;
+        include /etc/nginx/proxy_common.conf;
+    }
+
+    location ~ ^/projects/[0-9a-fA-F-]+/upload$ {
+        limit_req zone=upload_zone burst=5 nodelay;
+        limit_conn conn_zone 20;
+        client_max_body_size 11m;
+        include /etc/nginx/proxy_common.conf;
+    }
+
+    location / {
+        limit_req zone=general_zone burst=40 nodelay;
+        limit_conn conn_zone 20;
+        include /etc/nginx/proxy_common.conf;
+    }
+
+    error_page 400 /errors/400.html;
+    error_page 403 /errors/403.html;
+    error_page 404 /errors/404.html;
+    error_page 413 /errors/413.html;
+    error_page 429 /errors/429.html;
+    error_page 500 /errors/500.html;
+    error_page 502 /errors/502.html;
+    error_page 503 /errors/503.html;
+    error_page 504 /errors/504.html;
+    location ^~ /errors/ {
+        internal;
+        root /usr/share/nginx/html;
+    }
+}

@@ -9,9 +9,10 @@ export default defineConfig({
     rollupOptions: {
       input: {
         marketing: resolve(__dirname, 'app/frontend/marketing.ts'),
+        app: resolve(__dirname, 'app/frontend/app.ts'),
       },
       output: {
-        entryFileNames: 'marketing.js',
+        entryFileNames: '[name].js',
         assetFileNames: '[name].[ext]',
         chunkFileNames: '[name].js',
       },
