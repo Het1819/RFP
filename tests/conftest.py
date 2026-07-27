@@ -30,6 +30,7 @@ state. The fixture requires AUTH_MODE=dev (set in CI env and local .env).
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy import event as sa_event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -58,6 +59,23 @@ if _IS_SQLITE:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+    # pysqlite's DBAPI driver does its own implicit BEGIN/COMMIT handling
+    # ("transactional" mode) that fights with SQLAlchemy's SAVEPOINT-based
+    # test-isolation pattern used by the `db` fixture below (a real outer
+    # transaction plus a SAVEPOINT per `join_transaction_mode="create_savepoint"`).
+    # Without this documented workaround, pysqlite silently auto-commits/
+    # auto-begins around SAVEPOINT boundaries, which breaks nested-rollback
+    # semantics: internal `session.commit()` calls end up committing the
+    # *outer* transaction for real, and rows leak across tests. See:
+    # https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#serializable-isolation-savepoints-transactional-ddl
+    @sa_event.listens_for(test_engine, "connect")
+    def _sqlite_disable_pysqlite_transaction_control(dbapi_connection, _record):
+        dbapi_connection.isolation_level = None
+
+    @sa_event.listens_for(test_engine, "begin")
+    def _sqlite_emit_real_begin(conn):
+        conn.exec_driver_sql("BEGIN")
 else:
     test_engine = create_engine(settings.DATABASE_URL)
 
@@ -90,19 +108,71 @@ def setup_db_tables():
 def db():
     """Provides a transactional database session rolled back after each test.
 
-    Using a savepoint (nested transaction) rather than a raw rollback so that
-    tests can call `db.commit()` internally without destroying the outer
-    rollback boundary.
+    Uses SQLAlchemy 2.0's built-in external-transaction join mode
+    (`join_transaction_mode="create_savepoint"`): the connection opens one
+    real outer transaction, and the Session binds to it in savepoint mode.
+    Each `session.commit()` releases a SAVEPOINT (and SQLAlchemy
+    transparently opens a fresh one for the next unit of work) rather than
+    committing the outer transaction, so app code (route handlers, service
+    functions like `transition()`) can call commit() any number of times
+    within one test and every "commit" still nests inside the outer
+    transaction. `session.rollback()` similarly only rolls back to the
+    SAVEPOINT. The outer transaction is untouched by any of this and is
+    unconditionally rolled back at teardown, discarding everything -
+    including changes that were "committed" at the Session level - in one
+    step.
+
+    This replaces the older SQLAlchemy 1.x recipe (manual `begin_nested()` +
+    an `after_transaction_end` event listener that restarts the savepoint);
+    per SQLAlchemy 2.0 docs, "event handlers to 'reset' the nested
+    transaction are no longer required" once `join_transaction_mode` is used.
     """
     connection = test_engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
+    outer_transaction = connection.begin()
+    session = TestingSessionLocal(
+        bind=connection, join_transaction_mode="create_savepoint"
+    )
 
     yield session
 
     session.close()
-    transaction.rollback()
+    outer_transaction.rollback()
     connection.close()
+
+
+# ---------------------------------------------------------------------------
+# Default org/project/user fixture — shared setup for tests exercising
+# project- and document-scoped flows (ingestion, evidence, drafting, ...).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def org_project_user(db):
+    """Creates (or reuses) the default org/user and a fresh test project.
+
+    Mirrors the pattern used in tests/integration/test_projects.py:
+    `get_default_org_and_user(db)` for the org/user, plus a manually
+    constructed `ProposalProject`. Returns the actual ORM objects (not just
+    ids) since callers commonly need `.id` off all three.
+    """
+    from app.core.database import get_default_org_and_user
+    from app.models.organization import Organization
+    from app.models.project import ProposalProject
+    from app.models.user import User
+
+    org_id, user_id = get_default_org_and_user(db)
+    org = db.get(Organization, org_id)
+    user = db.get(User, user_id)
+    project = ProposalProject(
+        organization_id=org.id,
+        name="Test Project",
+        client_name="Test Client",
+        created_by_id=user.id,
+    )
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    return org, project, user
 
 
 # ---------------------------------------------------------------------------

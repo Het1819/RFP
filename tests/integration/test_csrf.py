@@ -72,8 +72,16 @@ def test_post_with_invalid_csrf_token_fails(client):
     assert "CSRF token validation failed" in response.text
 
 
-def test_mutating_actions_with_valid_csrf_token_succeeds(client, db):
+def test_mutating_actions_with_valid_csrf_token_succeeds(client, db, monkeypatch):
     """Proves that state-mutating actions pass when a valid CSRF token is provided."""
+    # A5c Task 6: reaching SCANNING now calls enqueue_scan_job(), which
+    # with QUEUE_ENABLED=false (test default) would run a real scan
+    # attempt synchronously in-process (including a real ClamAV socket
+    # connection). Stub it - this test is about CSRF, not the scanner.
+    import app.core.queue as queue_mod
+
+    monkeypatch.setattr(queue_mod, "enqueue_scan_job", lambda document_id: None)
+
     # 1. Access project creation and get token
     get_resp = client.get("/projects")
     csrf_token = extract_csrf_token(get_resp.text)

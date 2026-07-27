@@ -2,16 +2,134 @@
 
 This guide explains how to build, configure, run, and maintain the RFP Architect MVP in production or pilot environments.
 
-## 1. Required Environment Variables
+> **This system is NOT production-ready.** Phase A3 hardened secrets,
+> database/Redis authentication, LLM configuration, and storage
+> persistence. Phase A4 (this guide) adds a hardened Nginx TLS
+> reverse-proxy boundary in front of the app, with trusted-proxy-aware
+> client-IP resolution, security headers, an enforced Content Security
+> Policy, and edge request/rate limits. It does **not** add a publicly
+> trusted certificate (issuance/renewal were never performed), a trusted-
+> proxy allowlist beyond the single bundled Nginx, MFA/enterprise OIDC,
+> hostile-document isolation, or password recovery. Do not point real
+> customer or RFP data at a stack configured this way, and never expose it
+> beyond `127.0.0.1` for local validation.
 
-Configure these variables in your target deployment context (or `.env` file):
+## Edge Architecture (Phase A4)
 
-- **`APP_ENV`**: Set to `production` or `pilot`. Dev fallbacks are automatically disabled.
-- **`AUTH_MODE`**: Set to `session` (for email login) or `oidc` (for future SSO integration). **Never set to `dev` in production**.
-- **`SESSION_SECRET_KEY`**: A strong, cryptographically secure string of at least 32 characters used to sign session cookies. The app will fail startup if this key is missing or weak.
-- **`APP_SECRET_KEY`**: A strong secret key used for general application signing.
-- **`DATABASE_URL`**: The connection string for the PostgreSQL database (e.g. `postgresql+psycopg://user:password@host:5432/dbname`).
-- **`REDIS_URL`**: The connection string for Redis (e.g. `redis://host:6379/0`).
+```text
+Internet/host
+     |
+     | 80/443 only (Nginx is the ONLY service with published host ports)
+     v
+Nginx edge service (TLS termination, headers, rate limits)
+     |
+     | private "backend" network
+     v
+FastAPI app :8000 (no published port -- `expose: 8000` only)
+     |
+     +-- PostgreSQL (private, no published port)
+     +-- Redis (private, no published port)
+     +-- Worker (private, no published port)
+```
+
+- **Nginx is the only public service.** App, PostgreSQL, and Redis join
+  only the private `backend` network and are unreachable from the host or
+  the internet.
+- **TLS is terminated at Nginx.** TLS 1.2/1.3 only; TLS 1.0/1.1 are
+  rejected. Port 80 only redirects to HTTPS (308) or serves a future ACME
+  challenge path -- it never proxies application traffic.
+- **Forwarded headers are trusted from exactly one peer**: Nginx's
+  deterministic backend-network IP (`TRUSTED_PROXY_IPS`, `NGINX_BACKEND_IP`
+  in Compose, default `172.28.0.10`). Any other peer's `X-Forwarded-For`/
+  `X-Real-IP`/`Forwarded` headers are ignored outright -- see
+  `app/core/client_ip.py`. Nginx itself discards whatever forwarding
+  headers a client sent and sets its own authoritative values.
+- **Application Redis login throttling remains the account-aware control.**
+  Nginx's rate limits (`limit_req`/`limit_conn`) are defense-in-depth only,
+  independent of and not a replacement for it.
+- **HSTS preload is NOT enabled** (`Strict-Transport-Security:
+  max-age=31536000`, no `includeSubDomains`, no `preload`).
+- **No public certificate was requested.** Local validation uses a
+  self-signed certificate (`scripts/generate_local_tls_cert.py`) that no
+  real browser trusts without manual installation.
+
+## 1. Required Configuration
+
+Phase A3 configures production via **Docker Compose secrets** (mounted
+files) for sensitive values, plus plain environment variables for
+non-sensitive configuration. See `docker-compose.prod.yml` for the
+authoritative service definitions.
+
+### Secrets (mounted files, never environment variable literals)
+
+Generate local validation secrets with:
+```bash
+uv run python scripts/generate_local_prod_secrets.py
+uv run python scripts/generate_local_prod_secrets.py --import-anthropic-key
+```
+This writes files under the gitignored `secrets/` directory. **These are
+local validation credentials only** — they are not encrypted at rest by
+virtue of being Docker secrets, and mounting a file is not an enterprise
+secret manager. For a real deployment, replace every file under `secrets/`
+with operator-managed, non-default values before starting the stack, and
+apply your own encryption/access-control layer around them.
+
+| Secret file | Consumed via | Purpose |
+|---|---|---|
+| `secrets/app_secret.txt` | `APP_SECRET_KEY_FILE` | General application signing key |
+| `secrets/session_secret.txt` | `SESSION_SECRET_KEY_FILE` | Session cookie signing |
+| `secrets/throttle_secret.txt` | `LOGIN_THROTTLE_SECRET_FILE` | Login-throttle HMAC key |
+| `secrets/postgres_password.txt` | `POSTGRES_PASSWORD_FILE` | PostgreSQL password |
+| `secrets/redis_password.txt` | `REDIS_PASSWORD_FILE` | Redis password |
+| `secrets/redis.conf` | Redis `command:` | Redis `requirepass` + `appendonly yes` |
+| `secrets/anthropic_api_key.txt` | `ANTHROPIC_API_KEY_FILE` | Anthropic API key (never generated by tooling) |
+| `secrets/tls_cert.pem` | Nginx `ssl_certificate` | TLS certificate chain (Nginx only — never the app/worker) |
+| `secrets/tls_key.pem` | Nginx `ssl_certificate_key` | TLS private key (Nginx only, mounted read-only) |
+
+Nginx receives **only** `tls_cert`/`tls_key` — it is never given the
+application, database, Redis, or Anthropic secrets. See
+`docker-compose.prod.yml`.
+
+### Non-sensitive environment variables
+
+- **`APP_ENV`**: `production` or `pilot`. Dev fallbacks are automatically disabled.
+- **`AUTH_MODE`**: `session` (email + password login). **Never `dev` in production** — startup fails if it is.
+- **`DB_HOST` / `DB_PORT` / `DB_NAME` / `DB_USER`**: PostgreSQL connection components (password comes from the secret file above). See `app.core.config.Settings.effective_database_url`.
+- **`REDIS_HOST` / `REDIS_PORT` / `REDIS_DB`**: Redis connection components (password comes from the secret file above). See `effective_redis_url`.
+- **`LLM_PROVIDER`**: must be `anthropic`. `fake` is rejected at startup outside development/local/test.
+- **`LLM_MODEL`**: must be set explicitly (e.g. `claude-sonnet-4-6`); startup fails if unset in production.
+- **`LOCAL_STORAGE_PATH`**: must be an absolute, persistently-mounted path (e.g. `/data/storage`, matching the `app_storage` volume) — the `./data` development default is rejected in production.
+- **`QUARANTINE_STORAGE_PATH`**: must be an absolute, persistently-mounted path distinct from `LOCAL_STORAGE_PATH` — the `./data/quarantine` development default is rejected in production. See "Upload lifecycle" below.
+
+#### Upload lifecycle
+
+Every RFP and knowledge-document upload is written to quarantine storage
+first, under an application-generated storage identifier — the original
+filename the browser sent is retained only as display metadata and is
+never used to construct a filesystem path. The browser-supplied MIME type
+is untrusted and is not relied on for any decision; PDF and DOCX files are
+independently classified by server-side candidate-type detection. A file
+whose declared extension does not match its detected structure is routed
+to a rejected state and never reaches parsing, retrieval, or any LLM
+action. A file that passes candidate-type detection is queued for a security scan
+(ClamAV malware scanning plus PDF/DOCX content-policy inspection — see
+"Malware Scanning & Content-Policy Inspection" below). This document does
+**not** claim a file is clean, safe, sanitized, or malware-free merely
+because it reached `CLEAN_PENDING_PROMOTION` — promotion to actually
+usable `CLEAN` storage is out of scope for this phase (A5d). Knowledge documents can
+no longer be marked approved at upload time; the upload form's status
+selector was removed because the server always creates new knowledge
+documents as `PENDING` regardless of what a client submits.
+- **`NGINX_SERVER_NAME`**: the hostname Nginx answers to (`server_name`) — must exactly match `ALLOWED_HOSTS` and the hostname in `PUBLIC_BASE_URL`.
+- **`ALLOWED_HOSTS`**: comma-separated explicit hostnames the app answers to. No `*`, no empty entries; `localhost`/loopback values are rejected unless `ALLOW_LOOPBACK_HOST=true` is explicitly set (local validation only — never set this for a real deployment).
+- **`PUBLIC_BASE_URL`**: absolute `https://` URL for the public origin (e.g. `https://rfp.example.com`); no userinfo, fragment, or path; standard port only unless documented otherwise.
+- **`TRUSTED_PROXY_IPS`**: the exact IP(s) of the trusted reverse proxy (Nginx's deterministic backend IP, `NGINX_BACKEND_IP`, default `172.28.0.10`). Startup fails if unset in production — see `app/core/client_ip.py`.
+- **`SESSION_COOKIE_NAME`**: `__Host-rfp_session` in production (enforced; requires Secure + Path=/ + no Domain, which the app always sets).
+
+Startup fails closed (raises before the app accepts any traffic) if any of
+the above required secrets or settings are missing, empty, a known
+placeholder, or structurally invalid. See `app/core/config.py`,
+`Settings.validate_production_hardening`, for the full list.
 
 ### OIDC SSO Configuration (Only if `AUTH_MODE=oidc`)
 - **`OIDC_ISSUER_URL`**: The URL of your OIDC identity provider.
@@ -19,9 +137,12 @@ Configure these variables in your target deployment context (or `.env` file):
 - **`OIDC_CLIENT_SECRET`**: The client secret.
 - **`OIDC_REDIRECT_URI`**: The callback URI.
 
+OIDC is not implemented in this codebase yet — the login route returns
+`501` if `AUTH_MODE=oidc` is set.
+
 ### LLM Telemetry & Observability Configuration
 - **`ENABLE_LLM_TELEMETRY`**: Set to `true` (default) to log LLM metadata (latencies, token counts, error types, costs) to structured logs.
-- **`ENABLE_LLM_DEBUG_PAYLOAD_LOGGING`**: Must be `false` (default) in production-like environments. If enabled in dev/test, logs full payload metadata.
+- **`ENABLE_LLM_DEBUG_PAYLOAD_LOGGING`**: Must be `false` (default) in production-like environments; startup fails if `true`.
 
 ---
 
@@ -42,15 +163,40 @@ This performs a secure multi-stage build:
 
 ## 3. Running with Docker Compose
 
-To test the production-like stack locally, set your environment variables (especially `SESSION_SECRET_KEY`) and run:
+The production stack (`docker-compose.prod.yml`) reads secrets from files
+under `secrets/`, not environment variable literals. Generate local
+validation secrets and a local self-signed TLS certificate first, then
+start the stack:
 
 ```bash
-# Generate a strong session secret
-export SESSION_SECRET_KEY=$(openssl rand -hex 32)
+# Generate local validation secrets (never real production credentials)
+uv run python scripts/generate_local_prod_secrets.py
+uv run python scripts/generate_local_prod_secrets.py --import-anthropic-key
 
-# Start production compose
+# Generate a local-validation-only self-signed TLS certificate
+uv run python scripts/generate_local_tls_cert.py --hostname localhost
+
+# Non-secret config for local validation (never set ALLOW_LOOPBACK_HOST
+# for a real deployment)
+export LLM_MODEL=claude-sonnet-4-6
+export NGINX_SERVER_NAME=localhost
+export ALLOWED_HOSTS=localhost
+export ALLOW_LOOPBACK_HOST=true
+
+# Bind the edge to loopback only for local validation -- never 0.0.0.0
+export EDGE_HTTP_BIND=127.0.0.1
+export EDGE_HTTPS_BIND=127.0.0.1
+
+# Start the production-like compose stack
 docker compose -f docker-compose.prod.yml up -d
 ```
+
+**Nginx is the only service with published host ports** (80/443, mapped
+here to loopback-only for local validation). `app`, `worker`, `postgres`,
+and `redis` publish no host ports at all — they are reachable only from
+other containers on the private `backend` network. Direct access to the
+app's port from the host is not possible; all traffic must go through
+Nginx. See "Edge Architecture" above.
 
 ---
 
@@ -67,15 +213,20 @@ docker compose -f docker-compose.prod.yml exec app bash scripts/run_migrations.s
 
 ## 5. Creating a Pilot User
 
-When using `AUTH_MODE=session`, authentication requires an existing user in the database.
-To create a pilot user, run the following python one-liner inside the running application container:
+When using `AUTH_MODE=session`, authentication requires an existing,
+**active user with a real Argon2 password hash** in the database. A
+placeholder string like `hashed_password='not-applicable'` is not a valid
+hash — `verify_password()` always rejects it, so that user could never log
+in. Create the organization/user, then set a real password with the
+existing operator script (never hand-roll a hash):
 
 ```bash
+# 1. Create the organization and user (no password yet -- is_active=True).
 docker compose -f docker-compose.prod.yml exec app python -c "
 from app.core.database import SessionLocal
+from app.core.passwords import hash_password
 from app.models.organization import Organization
 from app.models.user import User
-import uuid
 
 db = SessionLocal()
 org = db.query(Organization).first()
@@ -88,14 +239,22 @@ if not org:
 user = User(
     email='pilot@company.com',
     organization_id=org.id,
-    hashed_password='not-applicable',
+    # Placeholder hash: cannot verify successfully against any password.
+    # It only exists to satisfy the NOT NULL column until step 2 below
+    # sets a real one -- this account cannot log in until then.
+    hashed_password=hash_password('placeholder-replace-immediately'),
     full_name='Pilot User',
-    is_active=True
+    is_active=True,
 )
 db.add(user)
 db.commit()
-print('Pilot user created successfully: pilot@company.com')
+print('Pilot user record created: pilot@company.com (no usable password yet)')
 "
+
+# 2. Set the real password interactively (never passed as a CLI argument,
+#    never printed, never a hand-written hash string).
+docker compose -f docker-compose.prod.yml exec app \
+    uv run python scripts/set_user_password.py pilot@company.com
 ```
 
 ---
@@ -103,15 +262,45 @@ print('Pilot user created successfully: pilot@company.com')
 ## 6. Verifying App & Queue Worker Status
 
 ### Web Application Health
-Use the healthcheck endpoints to verify availability:
-- **`/healthz`**: Returns `200` to indicate the Python process is alive.
+`/healthz` and `/readyz` are **not reachable from outside Nginx** (both
+return `404` at the public edge — see "Internal endpoints" above). The
+app's own Docker healthcheck reaches them directly over the private
+`backend` network:
+- **`/healthz`**: Returns `200` to indicate the Python process is alive. Never depends on the database or Redis — stays up during a dependency outage.
   ```bash
-  curl -f http://localhost:8000/healthz
+  docker compose -f docker-compose.prod.yml exec app curl -f http://127.0.0.1:8000/healthz
   ```
-- **`/readyz`**: Checks database connectivity and returns `200` only when the database is reachable.
+- **`/readyz`**: Returns `200` only when all current required dependencies are healthy: PostgreSQL connectivity, a real save/get/delete round-trip against the authenticated Redis session store, quarantine storage writability, and (Phase A5c) `clamd` connectivity (see `app.core.readiness.check_clamav_connectivity`). Returns `503` if any is unreachable.
   ```bash
-  curl -f http://localhost:8000/readyz
+  docker compose -f docker-compose.prod.yml exec app curl -f http://127.0.0.1:8000/readyz
   ```
+  **Deliberate tradeoff, not an accident:** `app` itself never talks to `clamd`
+  directly (only `worker` does — `app` only writes files to quarantine
+  storage and enqueues a scan job), yet `/readyz` still gates on `clamd`
+  connectivity, and `app`'s Docker healthcheck (which nginx's own
+  `depends_on: app: condition: service_healthy` chains off of) is exactly
+  that `/readyz`. This means a `clamd` outage marks `app` (and therefore
+  the whole public edge, via nginx) unhealthy, even though only background
+  scanning is actually affected — features that don't touch document
+  upload/scanning would otherwise stay available. This phase keeps the
+  coupling anyway: `app`'s readiness is interpreted as "can this instance
+  safely accept new uploads that need scanning," and a scanner outage
+  means new uploads cannot be safely accepted (they would sit stuck in
+  `SCANNING` behind a scanner that isn't reachable). `app`'s
+  `depends_on:` in `docker-compose.prod.yml` includes
+  `clamd: condition: service_healthy` so at least *startup ordering* is
+  correct (nginx won't flip healthy before `clamd`'s up-to-90s first-run
+  signature download completes) — but a *later* `clamd` outage will still
+  take down `/readyz`, `app`'s healthcheck, and therefore nginx's
+  dependency-gated availability. Splitting `/readyz` into scanner-specific
+  and non-scanner-specific probes is a reasonable follow-up but is out of
+  scope for this phase.
+
+For a lightweight edge-level check (no dependency details), use Nginx's
+own loopback-restricted health path:
+```bash
+docker compose -f docker-compose.prod.yml exec nginx wget -qO- http://127.0.0.1:8080/healthz-edge
+```
 
 ### Queue Worker Verification
 To verify that the `arq` worker is running and processing background tasks:
@@ -119,9 +308,10 @@ To verify that the `arq` worker is running and processing background tasks:
    ```bash
    docker compose -f docker-compose.prod.yml logs worker
    ```
-2. Verify Redis connectivity:
+2. Verify Redis connectivity (authentication required):
    ```bash
-   docker compose -f docker-compose.prod.yml exec redis redis-cli ping
+   docker compose -f docker-compose.prod.yml exec redis \
+       sh -c 'redis-cli -a "$(cat /run/secrets/redis_password)" --no-auth-warning ping'
    ```
 
 ---
@@ -144,9 +334,280 @@ For production/pilot setups:
 
 ## 9. Security Best Practices
 
-1. **HTTPS and Reverse Proxy**: Always configure an external load balancer or reverse proxy (such as Nginx, AWS ALB, or Cloudflare) to terminate SSL/TLS before forwarding requests to the application.
-2. **Backups**: Implement automated daily backups for your PostgreSQL database volume (`postgres_data`) and Redis AOF file (`redis_data`).
-3. **Secrets Management**: Never bake secrets (API keys, credentials, or session keys) into Docker images. Pass them as runtime environment variables.
+1. **HTTPS and Reverse Proxy**: Nginx now terminates TLS and is the sole public service (see "Edge Architecture" above) — but no publicly trusted certificate has been issued (local validation uses a self-signed one), and there is still no trusted-proxy allowlist beyond the single bundled Nginx, no external WAF, and no CDN. Do not point real traffic at this stack.
+2. **Backups**: Implement automated daily backups for your PostgreSQL database volume (`postgres_data`) and Redis AOF file (`redis_data`). The uploaded/source-document volume (`app_storage`) also needs its own backup coverage.
+3. **Secrets Management**: Never bake secrets (API keys, credentials, or session keys) into Docker images, and never pass them as plain environment variable literals in Compose. Use the `*_FILE` settings (`APP_SECRET_KEY_FILE`, `SESSION_SECRET_KEY_FILE`, `LOGIN_THROTTLE_SECRET_FILE`, `POSTGRES_PASSWORD_FILE`, `REDIS_PASSWORD_FILE`, `ANTHROPIC_API_KEY_FILE`) backed by Docker Compose secrets (mounted files under `secrets/`, gitignored). Nginx receives only its TLS cert/key — never any application/database/Redis/Anthropic secret. Note: a mounted secret file is not itself an enterprise secret manager and is not proof of encrypted storage — it only keeps the value out of the Compose YAML and out of `docker inspect` environment output.
+4. **No customer data in local validation**: Never use real customer, RFP, or knowledge-base documents when validating this stack locally. Use harmless local fixtures only.
+5. **No live LLM calls except explicitly authorized**: Normal startup, tests, and Compose validation never call the real Anthropic API. The only way to make a real call is the separately authorized `scripts/check_anthropic_live.py --live` operator command.
+
+---
+
+## 9a. Edge Security Details (Phase A4)
+
+### TLS policy
+TLS 1.2 and 1.3 only (1.0/1.1 rejected); server cipher preference for TLS
+1.2; session cache with a 10-minute bound; session tickets disabled (no
+key-rotation mechanism is implemented, so leaving them on would be worse
+than off); no client-certificate authentication; no OCSP stapling (not
+implemented/tested).
+
+### Security response headers
+Emitted by Nginx on every response (2xx through 5xx) for the HTTPS server:
+`Strict-Transport-Security: max-age=31536000` (no `includeSubDomains`, no
+`preload`), an enforced `Content-Security-Policy` (see below),
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`,
+`Permissions-Policy`, and `X-Frame-Options: DENY`. The application does
+**not** also set these — Nginx is the single source of truth, to avoid
+duplicate/conflicting values.
+
+### Content Security Policy
+`default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors
+'none'; form-action 'self'; script-src 'self'; style-src 'self'
+'unsafe-inline' https://fonts.googleapis.com; connect-src 'self'; font-src
+'self' https://fonts.gstatic.com; img-src 'self' data:; media-src 'none';
+frame-src 'none'; manifest-src 'self'; upgrade-insecure-requests`.
+
+`script-src` has **no** exception: no `'unsafe-inline'`, no
+`'unsafe-eval'`, no third-party origin. htmx (previously loaded from the
+`unpkg.com` CDN) is now vendored via npm and self-hosted, compiled into
+`app/static/dist/app.js` alongside the extracted UI behaviors that used to
+be inline `onclick`/`onmouseover`/etc. handlers across
+`app/templates/projects/*.html`.
+
+`style-src` keeps two narrow, explicitly-named exceptions: Google Fonts
+(the stylesheet + font files the templates already used) and
+`'unsafe-inline'`. The templates use several hundred inline `style="..."`
+attributes across the compliance-matrix UI; removing all of them is out of
+scope for this pass. This is a **documented, deliberate exception scoped
+to styles only** — it does not weaken `script-src`, which is where CSP's
+XSS protection actually lives.
+
+### Trusted-proxy client-IP resolution
+Exactly one reverse proxy is trusted: Nginx's deterministic backend IP
+(`TRUSTED_PROXY_IPS`). See `app/core/client_ip.py`. If the direct ASGI
+peer is not that exact IP, `X-Forwarded-For`/`X-Real-IP`/`Forwarded`
+headers are ignored outright and the direct peer address is used instead
+— a request cannot spoof its way past this by sending its own forwarding
+headers. Nginx itself discards whatever forwarding headers a client sent
+and sets a single authoritative value from its own observed connection
+(never appending to an inbound chain). Login throttling, authentication
+audit events, and security logs all resolve the client IP through this
+one function.
+
+### Cache controls
+Authenticated HTML, login/logout responses, and any response containing
+proposal/RFP/evidence/user data use `Cache-Control: no-store` (set by the
+application). Nginx does not cache session-bearing responses.
+
+### Request limits (defense in depth, not a replacement for Redis throttling)
+`client_max_body_size 11m` (the app's 10MB document limit plus small
+multipart overhead). Edge rate limits (provisional pilot defaults,
+configurable in `nginx/nginx.conf`): general traffic 20 req/s/IP (burst
+40), `/login` 10 req/min/IP (burst 5), uploads 10 req/min/IP (burst 5),
+20 concurrent connections/IP. These return `429`, never a misleading
+`503`, and never create a permanent lockout. They are independent of, and
+do not replace, the application's account-aware Redis login throttling
+(`app/core/sessions/throttling.py`), which remains the real
+authentication control.
+
+### Internal endpoints
+`/metrics` and `/readyz` return `404` at the Nginx edge — they are not
+reachable externally. The app's own Docker healthcheck still reaches
+`/readyz` directly over the private `backend` network, bypassing Nginx
+entirely. A minimal `/healthz-edge` endpoint (loopback-restricted, no
+dependency/version details) exists for local container/orchestrator use.
+
+---
+
+## 9b. Malware Scanning & Content-Policy Inspection (Phase A5c)
+
+Phase A5c adds the scan stage that A5b's quarantine-first upload lifecycle
+(see "Upload lifecycle" above) referenced but did not yet implement. Every
+document that passes candidate-type detection now moves from `VALIDATING`
+into `SCANNING`, where it is run through ClamAV malware scanning and then,
+on a clean malware result, a PDF- or DOCX-specific content-policy
+inspector. **No document is safe to open, download, parse, or send to the
+LLM before it leaves `SCANNING` with a `CLEAN_PENDING_PROMOTION` (or
+better) outcome** — and, per the ingestion-state module docstring,
+`CLEAN_PENDING_PROMOTION` itself is still not usable; promoting it to the
+actually-parseable `CLEAN` state is out of scope for this phase (A5d).
+
+### clamd image and signature-update policy
+`docker-compose.prod.yml` pins the `clamd` service to a digest:
+```
+image: clamav/clamav@sha256:e7ead98e7e07231b151bce988e0cfb0a3b46e6e7046d9dd44fd838c0df724a03
+```
+resolved 2026-07-26 via `docker pull clamav/clamav:1.4` (ClamAV 1.4.5 at
+resolution time). `clamd` joins only the private `backend` network, has no
+published ports, receives no secrets, and no application/database/Redis/
+Anthropic credential ever reaches it — only `worker` talks to it, over the
+network, sending file bytes via the INSTREAM protocol. Its signature
+database lives on its own `clamav_signatures` named volume.
+
+**Signature freshness is two separate concerns, and this repo only owns
+one of them:**
+- **freshclam** (ClamAV's own signature updater) runs *inside* the `clamd`
+  container on its own schedule. This repo does not configure, trigger, or
+  manage freshclam directly — it is the upstream image's built-in
+  behavior.
+- **`CLAMAV_MAX_SIGNATURE_AGE_HOURS`** (default `48`, see
+  `app/core/config.py`) is an **application-side, fail-closed staleness
+  check** — before every scan attempt, `app.services.malware_scan` calls
+  clamd's `VERSION` command and rejects the attempt into `SCAN_FAILED`
+  with reason code `SIGNATURE_DATABASE_STALE` if the reported signature
+  timestamp is older than this threshold, or if the timestamp cannot be
+  parsed at all (a missing/unparseable timestamp is treated as stale, not
+  assumed fresh). This is **not** a freshclam configuration knob — it is
+  this application's independent judgment call about whether it trusts the
+  currently-loaded signatures enough to rely on a clean result.
+
+### Ingestion state list (Phase A5c)
+`app/services/ingestion_state.py`'s `IngestionStatus` now defines:
+
+| State | Meaning |
+|---|---|
+| `QUARANTINED` | Just written to quarantine storage; not yet validated. |
+| `VALIDATING` | Candidate-type detection (A5b) in progress. |
+| `SCANNING` | Malware scan and/or content-policy inspection in progress or queued for (re)attempt. |
+| `REJECTED_TYPE` | Declared extension did not match detected structure (A5b). Terminal. |
+| `REJECTED_MALWARE` | ClamAV reported `FOUND`. Terminal. |
+| `REJECTED_CONTENT_POLICY` | PDF/DOCX inspector found a confirmed policy violation (not an inspection failure). Terminal. |
+| `SCAN_FAILED` | The scan attempt could not reach a verdict (scanner unavailable, timeout, stale signatures, inspection failure, quarantine-integrity mismatch, or an unexpected internal error). Re-enterable into `SCANNING` for a bounded retry — see "Retry policy" below — until `scan_attempt_count` reaches `SCAN_MAX_ATTEMPTS`, at which point it is the operator-visible terminal-for-now state. |
+| `CLEAN_PENDING_PROMOTION` | Passed both malware scanning and content-policy inspection. **Still not safe to open, download, parse, or send to the LLM** — promotion to `CLEAN` is A5d's job, not this phase's. No outbound transitions exist from this state yet. |
+| `CLEAN` | (Reserved for A5d's promotion step.) Only `CLEAN` documents may enter `PARSING`. |
+| `PARSING` / `PARSE_FAILED` / `COMPLETED` | Unchanged from prior phases. |
+| `LEGACY_UNVERIFIED` | Pre-A5b documents that predate this pipeline; re-enters at `VALIDATING`. |
+
+Content-policy inspection is not a separate persisted state — it runs
+inside `SCANNING`, after a clean malware result, so `REJECTED_MALWARE` and
+`REJECTED_CONTENT_POLICY` are both reachable directly from `SCANNING`. All
+transitions are enforced centrally by `ingestion_state.transition()`;
+routes, worker tasks, and templates never set `ingestion_status` directly.
+
+### PDF content-policy inspection: checks and known limitations
+Implemented in `app/services/pdf_content_policy.py` (parent-process
+orchestrator) and `app/services/pdf_inspector_subprocess.py` (the actual
+`pypdf`-based inspector). `pypdf` is imported **only** inside the
+subprocess, which is spawned via `sys.executable` (never a shell), never
+inherits the parent's environment (so no DB/session/API-key secrets are
+reachable even if `pypdf` were exploited), and is resource-bounded before
+the untrusted file is opened (`PDF_INSPECTOR_CPU_SECONDS` CPU-time rlimit,
+`PDF_INSPECTOR_MEMORY_BYTES` address-space rlimit — both no-ops on
+Windows, matching this repo's existing POSIX-only rlimit pattern). Any
+anomaly from the subprocess — timeout, non-zero exit, malformed/multi-line
+stdout — is treated identically to an explicit failure: the parent always
+fails closed, never approximates a pass.
+
+Checks performed (structural/metadata only — the inspector never calls
+`extract_text()`, `extract_images()`, rendering, or any API that
+interprets page content):
+- Encryption flag (`PDF_ENCRYPTED`).
+- Catalog-level `/OpenAction` or `/AA` (auto-run actions) and page-level
+  annotations with `/S` of `/JS`, `/JavaScript`, `/Launch`, or `/URI`
+  (`PDF_ACTIVE_CONTENT`).
+- `/Names/EmbeddedFiles` attachment names, `/FileAttachment` page
+  annotations, and a bounded full-object-table scan for orphan
+  `/Type /Filespec` objects not linked from either of those (an
+  orphan-object smuggling technique targeted checks alone would miss)
+  (`PDF_EMBEDDED_FILE`).
+- Any `pypdf` exception, timeout, or unparseable result (`PDF_INSPECTION_FAILED`).
+
+**Known limitation (stated plainly, not padded):** this is
+structural-metadata-only inspection via an isolated `pypdf` subprocess —
+it is **not** a full security audit of the PDF specification's entire
+attack surface. It does not render pages, extract text, or evaluate
+JavaScript. The orphan-`Filespec` scan mitigates but does not eliminate
+gaps in catalog-tree coverage; a maliciously crafted file exploiting a
+`pypdf` parsing bug itself is bounded by the subprocess's rlimits and
+isolation, not prevented by these checks.
+
+### DOCX content-policy inspection: checks and known limitations
+Implemented in `app/services/docx_content_policy.py`, running directly in
+the worker process (no subprocess isolation — the standard-library `zipfile`
+module is the only dependency beyond the A5b detection module's hardened
+XML parser). Every check reads only ZIP central-directory metadata
+(`infolist()`/`getinfo()`) or a small bounded prefix of a member's
+decompressed bytes; the module never calls `ZipFile.extract`/`extractall`
+and never writes a member to disk.
+
+Checks performed:
+- Malformed/corrupt ZIP structure, duplicate member names, member count
+  over `DOCX_DETECTION_MAX_MEMBERS`, any encrypted ZIP entry (illegitimate
+  in a genuine OOXML package), path-traversal or absolute/UNC member
+  names, and nested-archive extensions (`.zip`/`.docx`/`.docm`/`.rar`/
+  `.7z`/`.tar`/`.gz`) smuggled in as member names (`DOCX_MALFORMED_PACKAGE`).
+- Total declared uncompressed size over `DOCX_MAX_UNCOMPRESSED_TOTAL_BYTES`,
+  or a declared uncompressed:compressed ratio over
+  `DOCX_MAX_COMPRESSION_RATIO` (zip-bomb defense) (`DOCX_ARCHIVE_LIMIT`).
+- `vbaProject.bin` present, or a VBA-macro content-type marker in
+  `[Content_Types].xml` (`DOCX_MACRO_PRESENT`).
+- An OLE-magic-prefixed member under `word/embeddings/` (`DOCX_OLE_PRESENT`).
+- An `External` `TargetMode` relationship in
+  `word/_rels/document.xml.rels` (`DOCX_EXTERNAL_RELATIONSHIP`).
+
+**Known limitation (stated plainly, not padded):** this is bounded
+central-directory inspection, **not** full OOXML schema validation. It is
+deliberately independently correct (re-checks a handful of things A5b's
+`detect_docx_candidate` already checks, as defense in depth) but does not
+parse or validate the full document XML content beyond `[Content_Types].xml`
+and the document relationships part, and it has no distinct "inspection
+could not determine" outcome — every failure mode it can produce already
+resolves to a definite, confirmed-violation reason code (an actual
+exception is caught by `run_scan`'s outer handler instead).
+
+### Resource limits and failure modes
+| Setting | Default | Purpose | On exceeding it |
+|---|---|---|---|
+| `CLAMAV_STREAM_MAX_BYTES` | 10 MiB (must be ≤ `MAX_UPLOAD_SIZE`; enforced at startup) | Client-side cap enforced incrementally while streaming to clamd, never by buffering the whole file. Distinct from clamd's own daemon-side `StreamMaxLength`. | `ScanOutcome.SIZE_LIMIT_EXCEEDED` → `SCAN_FAILED` / `SCAN_SIZE_LIMIT_EXCEEDED`. |
+| `PDF_INSPECTION_TIMEOUT_SECONDS` | 15.0 | Parent-process wall-clock wait for the PDF inspector subprocess; kept above the CPU rlimit to allow for process startup/I-O wait. | Subprocess timeout → `SCAN_FAILED` / `PDF_INSPECTION_FAILED`. |
+| `PDF_INSPECTOR_CPU_SECONDS` | 10 | Subprocess CPU-time rlimit, applied before the untrusted file is opened (POSIX only). | Subprocess killed by the OS → non-zero exit → `SCAN_FAILED` / `PDF_INSPECTION_FAILED`. |
+| `PDF_INSPECTOR_MEMORY_BYTES` | 512 MiB | Subprocess address-space rlimit (POSIX only). | Subprocess killed/OOM → non-zero exit → `SCAN_FAILED` / `PDF_INSPECTION_FAILED`. |
+| `DOCX_MAX_UNCOMPRESSED_TOTAL_BYTES` | 200 MiB | Zip-bomb defense: total declared uncompressed size across all members. | `REJECTED_CONTENT_POLICY` / `DOCX_ARCHIVE_LIMIT` (a confirmed rejection, not a scan failure). |
+| `DOCX_MAX_COMPRESSION_RATIO` | 100:1 | Zip-bomb defense: declared uncompressed:compressed ratio, far beyond ordinary XML/text/image content. | `REJECTED_CONTENT_POLICY` / `DOCX_ARCHIVE_LIMIT`. |
+| `CLAMAV_MAX_SIGNATURE_AGE_HOURS` | 48 | App-side fail-closed staleness threshold on clamd's reported signature timestamp (see above). | `SCAN_FAILED` / `SIGNATURE_DATABASE_STALE`. |
+| `CLAMAV_CONNECT_TIMEOUT_SECONDS` / `CLAMAV_IO_TIMEOUT_SECONDS` | 5.0 / 30.0 | Socket connect/read timeouts against `clamd`. | Connect failure → `SCAN_FAILED` / `SCANNER_UNAVAILABLE`; I/O timeout → `SCAN_FAILED` / `SCANNER_TIMEOUT`. |
+
+A digest-drift guard also runs before every scan attempt: the quarantine
+path is re-resolved and its SHA-256 recomputed; any mismatch against the
+digest recorded at quarantine time, or a missing file, fails closed into
+`SCAN_FAILED` / `QUARANTINE_INTEGRITY_MISMATCH` rather than scanning bytes
+that may not be what was originally quarantined.
+
+### Retry policy
+Scan attempts are bounded, not infinite and not silently dropped:
+- `SCAN_MAX_ATTEMPTS` (default `3`) caps the number of `run_scan`
+  invocations a document may accumulate. Once
+  `scan_attempt_count >= SCAN_MAX_ATTEMPTS`, a document left in
+  `SCAN_FAILED` is the **operator-visible terminal-for-now state** — it is
+  deliberately not re-armed for another attempt.
+- Backoff is exponential with jitter:
+  `delay = min(SCAN_RETRY_BACKOFF_BASE_SECONDS * 2**(attempt - 1),
+  SCAN_RETRY_BACKOFF_MAX_SECONDS)` (defaults: base `5`s, max `300`s), then
+  ±50% jitter is applied. The real-queue path defers the retry job via
+  arq's `_defer_by`; the `QUEUE_ENABLED=False` sync fallback (used by most
+  of the test suite and dev/CI environments without Redis) computes the
+  same delay value but does not actually wait on it before running the
+  next attempt inline — a deliberate, documented simplification for
+  dev/test only.
+- **Dev-mode note:** with `QUEUE_ENABLED=False`, the entire scan (including
+  any bounded retries) runs synchronously, inline, inside the upload HTTP
+  request handler — there is no background worker involved. If `clamd` is
+  unreachable in this mode, the request can block for up to roughly
+  `SCAN_MAX_ATTEMPTS` × `CLAMAV_CONNECT_TIMEOUT_SECONDS` (default: up to
+  ~15s with 3 attempts at the 5s default) before the upload response
+  returns, since each failed attempt's connect timeout is incurred
+  synchronously before the next retry runs. This is expected and fine for
+  local dev/CI; it is not how the queue-enabled production path behaves.
+- Exhaustion is always operator-visible: every `SCAN_FAILED` transition
+  writes a structured `AuditEvent` (action `document_ingestion_transition`)
+  including `scan_attempt_count`, and the final exhausting attempt adds
+  `scan_exhausted: true` plus a `logger.warning` line. No scan failure is
+  ever silently dropped — an exhausted document simply stops being
+  automatically retried and requires operator attention.
+- A malware signature name (when ClamAV reports `FOUND`) and any other
+  forensic detail is recorded only in `AuditEvent.details` — never in
+  `document.rejection_reason_code` or `document.operator_failure_summary`,
+  both of which templates/UI may eventually surface to end users.
 
 ---
 

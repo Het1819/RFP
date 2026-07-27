@@ -4,14 +4,108 @@ from app.core.database import get_default_org_and_user
 from app.models.audit import AuditEvent
 from app.models.document import Document, DocumentPage
 from app.models.evidence import EvidenceLink
+from app.models.job import ProcessingJob
 from app.models.project import ProposalProject
 from app.models.requirement import Requirement
 from app.models.response import DraftResponse
 from app.models.review import ReviewTask
+from app.services.ingestion_state import IngestionStatus
 from tests.integration.test_projects import create_test_pdf
 
 
+def test_knowledge_upload_route_reaches_scanning_and_forces_pending(
+    client, db, monkeypatch
+):
+    """A5b: the knowledge upload route routes through quarantine-first
+    ingestion and stops at SCANNING/REJECTED_TYPE. It must never trust a
+    client-submitted approval_status - every newly uploaded knowledge
+    document is forced to PENDING regardless of what the form claims, and
+    no legacy document_processing job or DocumentPage is created here."""
+    # A5c Task 6: reaching SCANNING now calls enqueue_scan_job(), which
+    # with QUEUE_ENABLED=false (test default) would run a real scan
+    # attempt synchronously in-process (including a real ClamAV socket
+    # connection). Stub it so this test keeps asserting the A5b route
+    # behavior in isolation from the scanner.
+    import app.core.queue as queue_mod
+
+    monkeypatch.setattr(queue_mod, "enqueue_scan_job", lambda document_id: None)
+
+    org_id, user_id = get_default_org_and_user(db)
+
+    project = ProposalProject(
+        organization_id=org_id,
+        created_by_id=user_id,
+        name="Knowledge Base Bid",
+        client_name="Oscorp",
+        status="draft",
+    )
+    db.add(project)
+    db.commit()
+
+    pdf_content = create_test_pdf(
+        [
+            "We support SSO authentication protocols including SAML and OAuth.",
+            "System authentication details page.",
+        ]
+    )
+
+    payload = {
+        "owner_name": "Security Team",
+        "tags": "sso, auth",
+        "approval_status": "APPROVED",  # forged; must be ignored
+        "version": "2.1",
+        "review_date": "2026-12-31",
+    }
+    upload_file = {"file": ("kb_approved.pdf", pdf_content, "application/pdf")}
+
+    upload_resp = client.post(
+        f"/projects/{project.id}/knowledge",
+        data=payload,
+        files=upload_file,
+        follow_redirects=False,
+    )
+    assert upload_resp.status_code == 303
+
+    doc = db.scalars(
+        select(Document).where(
+            Document.project_id == project.id,
+            Document.doc_role == "knowledge_base",
+        )
+    ).one()
+    assert doc.owner_name == "Security Team"
+    assert doc.tags == "sso, auth"
+    assert doc.ingestion_status == IngestionStatus.SCANNING
+    # The forged "APPROVED" form value must never be trusted.
+    assert doc.approval_status == "PENDING"
+
+    # No parsing/pages and no legacy processing job happen at this phase.
+    pages = db.scalars(
+        select(DocumentPage).where(DocumentPage.document_id == doc.id)
+    ).all()
+    assert pages == []
+    assert (
+        db.scalar(select(ProcessingJob).where(ProcessingJob.document_id == doc.id))
+        is None
+    )
+
+    # Verify audit event for the quarantine write.
+    audit = db.scalars(
+        select(AuditEvent).where(
+            AuditEvent.action == "document_upload_quarantined",
+            AuditEvent.entity_id == doc.id,
+        )
+    ).first()
+    assert audit is not None
+
+
 def test_knowledge_base_flow(client, db):
+    """Evidence linking, FTS retrieval, and AI drafting against knowledge
+    documents. Parsing (DocumentPage creation) and approval review are a
+    later phase (A5c+) than the quarantine-first upload route covered by
+    A5b, so this test builds already-parsed/approved rows directly rather
+    than going through the upload route - the route's own behavior is
+    covered separately by
+    test_knowledge_upload_route_reaches_scanning_and_forces_pending."""
     org_id, user_id = get_default_org_and_user(db)
 
     # 1. Setup Project & Requirement
@@ -37,44 +131,38 @@ def test_knowledge_base_flow(client, db):
     db.add(req)
     db.commit()
 
-    # 2. Generate PDF file for APPROVED knowledge base document
-    pdf_content = create_test_pdf(
-        [
-            "We support SSO authentication protocols including SAML and OAuth.",
-            "System authentication details page.",
-        ]
+    # 2. Directly construct an APPROVED, already-parsed knowledge document
+    # (post-quarantine state, out of A5b's scope to produce via the route).
+    doc = Document(
+        project_id=project.id,
+        name="kb_approved.pdf",
+        file_path="mock_quarantine_path.pdf",
+        file_type="application/pdf",
+        doc_role="knowledge_base",
+        processing_status="completed",
+        owner_name="Security Team",
+        tags="sso, auth",
+        approval_status="APPROVED",
+        version="2.1",
+        created_by_id=user_id,
+        ingestion_status=IngestionStatus.COMPLETED,
     )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
 
-    payload = {
-        "owner_name": "Security Team",
-        "tags": "sso, auth",
-        "approval_status": "APPROVED",
-        "version": "2.1",
-        "review_date": "2026-12-31",
-    }
-    upload_file = {"file": ("kb_approved.pdf", pdf_content, "application/pdf")}
-
-    # 3. Upload APPROVED knowledge base document
-    upload_resp = client.post(
-        f"/projects/{project.id}/knowledge",
-        data=payload,
-        files=upload_file,
-        follow_redirects=False,
+    page1 = DocumentPage(
+        document_id=doc.id,
+        page_number=1,
+        content="We support SSO authentication protocols including SAML and OAuth.",
     )
-    assert upload_resp.status_code == 303
-
-    # Verify document and page created
-    doc = db.scalars(
-        select(Document).where(
-            Document.project_id == project.id,
-            Document.doc_role == "knowledge_base",
-            Document.approval_status == "APPROVED",
-        )
-    ).first()
-    assert doc is not None
-    assert doc.owner_name == "Security Team"
-    assert doc.tags == "sso, auth"
-    assert doc.processing_status == "completed"
+    page2 = DocumentPage(
+        document_id=doc.id,
+        page_number=2,
+        content="System authentication details page.",
+    )
+    db.add_all([page1, page2])
+    db.commit()
 
     pages = db.scalars(
         select(DocumentPage).where(DocumentPage.document_id == doc.id)
@@ -82,44 +170,33 @@ def test_knowledge_base_flow(client, db):
     assert len(pages) == 2
     assert "SSO authentication" in pages[0].content
 
-    # Verify audit event for upload
-    audit = db.scalars(
-        select(AuditEvent).where(
-            AuditEvent.action == "knowledge_upload",
-            AuditEvent.entity_id == doc.id,
-        )
-    ).first()
-    assert audit is not None
-
-    # 4. Upload UNAPPROVED knowledge base document
-    pdf_content_unapproved = create_test_pdf(
-        [
-            "Draft detail: SSO authentication might be supported later.",
-        ]
+    # 3. Directly construct a PENDING (unapproved), already-parsed
+    # knowledge document.
+    doc_unapproved = Document(
+        project_id=project.id,
+        name="kb_unapproved.pdf",
+        file_path="mock_quarantine_path_2.pdf",
+        file_type="application/pdf",
+        doc_role="knowledge_base",
+        processing_status="completed",
+        owner_name="Drafting Team",
+        tags="sso, draft",
+        approval_status="PENDING",
+        version="1.0",
+        created_by_id=user_id,
     )
-    payload_unapproved = {
-        "owner_name": "Drafting Team",
-        "tags": "sso, draft",
-        "approval_status": "PENDING",
-        "version": "1.0",
-    }
-    upload_resp_unapproved = client.post(
-        f"/projects/{project.id}/knowledge",
-        data=payload_unapproved,
-        files={
-            "file": ("kb_unapproved.pdf", pdf_content_unapproved, "application/pdf")
-        },
-        follow_redirects=False,
-    )
-    assert upload_resp_unapproved.status_code == 303
+    db.add(doc_unapproved)
+    db.commit()
+    db.refresh(doc_unapproved)
 
-    doc_unapproved = db.scalars(
-        select(Document).where(
-            Document.project_id == project.id,
-            Document.doc_role == "knowledge_base",
-            Document.approval_status == "PENDING",
+    db.add(
+        DocumentPage(
+            document_id=doc_unapproved.id,
+            page_number=1,
+            content="Draft detail: SSO authentication might be supported later.",
         )
-    ).first()
+    )
+    db.commit()
     assert doc_unapproved is not None
 
     # 5. Access Workspace GET - verify FTS retrieves APPROVED but NOT UNAPPROVED text

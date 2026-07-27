@@ -8,14 +8,15 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Plus+Jakarta+Sans:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/static/css/style.css">
-    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <link rel="stylesheet" href="/static/dist/app.css">
+    <script type="module" src="/static/dist/app.js" defer></script>
 </head>
 <body>
     <div class="glass-bg"></div>
     
     <div class="app-shell" id="app-shell">
         <!-- Sidebar overlay for mobile drawer -->
-        <div class="sidebar-overlay" onclick="document.getElementById('app-shell').classList.remove('sidebar-open')"></div>
+        <div class="sidebar-overlay"></div>
 
         <!-- Left Sidebar Navigation -->
         <aside class="sidebar">
@@ -58,7 +59,7 @@
         <div class="main-content">
             <!-- Mobile Top Navigation Bar -->
             <div class="mobile-nav-bar">
-                <button class="menu-toggle-btn" onclick="document.getElementById('app-shell').classList.add('sidebar-open')">☰</button>
+                <button class="menu-toggle-btn">☰</button>
                 <div class="logo" style="display: flex; align-items: center; gap: 0.25rem;">
                     <span class="logo-icon" style="font-size: 1.2rem;">📐</span>
                     <span class="logo-text" style="font-size: 1.1rem; font-weight: 700; color: var(--text-primary);">RFP Architect</span>
@@ -69,14 +70,14 @@
             <!-- Desktop Workspace Top Bar -->
             <header class="top-bar">
                 <div class="top-bar-left">
-                    <a href="/projects" style="text-decoration: none; font-size: 1.25rem; color: var(--text-muted); transition: color var(--transition-fast);" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-muted)'">&larr;</a>
+                    <a href="/projects" class="back-link" style="text-decoration: none; font-size: 1.25rem; color: var(--text-muted); transition: color var(--transition-fast);">&larr;</a>
                     <div style="display: flex; flex-direction: column;">
                         <span class="workspace-context">Proposal Workspace • {{ project.client_name }}</span>
                         <span class="workspace-title">{{ project.name }}</span>
                     </div>
                 </div>
                 <div class="top-bar-right">
-                    {% if document and document.processing_status == 'completed' %}
+                    {% if document and document.processing_status == 'completed' and document.ingestion_status == "COMPLETED" %}
                         <a href="/projects/{{ project.id }}/matrix" class="btn btn-primary" style="padding: 0.6rem 1.25rem; font-size: 0.9rem; border-radius: var(--radius-sm);">Open Compliance Matrix &rarr;</a>
                     {% endif %}
                 </div>
@@ -134,6 +135,17 @@
 
                 <div class="feature-card" style="margin-top: var(--space-lg); padding: var(--space-lg); border-color: var(--border-color); overflow: hidden;">
                     <div style="font-size: 0.8rem; font-weight: 700; text-transform: uppercase; color: var(--text-muted); letter-spacing: 0.05em; margin-bottom: var(--space-md);">RFP Workspace Journey</div>
+                    {% if document and document.ingestion_status == "QUARANTINED" %}
+                        <span class="badge" style="margin-bottom: var(--space-md); display: inline-block; font-size: 0.75rem;">Upload received. Preparing for validation.</span>
+                    {% elif document and document.ingestion_status == "VALIDATING" %}
+                        <span class="badge" style="margin-bottom: var(--space-md); display: inline-block; font-size: 0.75rem;">Validating document type.</span>
+                    {% elif document and document.ingestion_status == "SCANNING" %}
+                        <span class="badge" style="margin-bottom: var(--space-md); display: inline-block; font-size: 0.75rem;">Awaiting security scan.</span>
+                    {% elif document and document.ingestion_status == "REJECTED_TYPE" %}
+                        <span class="badge" style="margin-bottom: var(--space-md); display: inline-block; font-size: 0.75rem;">Document rejected: please upload a valid PDF or DOCX file.</span>
+                    {% elif document and document.ingestion_status == "LEGACY_UNVERIFIED" %}
+                        <span class="badge" style="margin-bottom: var(--space-md); display: inline-block; font-size: 0.75rem;">This existing document requires security reprocessing before it can be used.</span>
+                    {% endif %}
                     
                     <div class="stepper-container">
                         <div class="stepper-line">
@@ -179,7 +191,7 @@
                         </div>
 
                         <!-- Compliance Matrix Link Card -->
-                        {% if document and document.processing_status == 'completed' %}
+                        {% if document and document.processing_status == 'completed' and document.ingestion_status == "COMPLETED" %}
                         <div class="feature-card" style="margin-top: 0; padding: var(--space-lg); display: flex; flex-direction: column; gap: var(--space-sm); border-color: var(--border-color);">
                             <h3 style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary); display: flex; align-items: center; gap: var(--space-sm);">
                                 <span>📋</span> Compliance & Requirements Matrix
@@ -202,7 +214,7 @@
                                 Export structured tables and drafts compiled from source-backed responses once compliance matrix reviews are finalized.
                             </p>
                             
-                            {% if document and document.processing_status == 'completed' %}
+                            {% if document and document.processing_status == 'completed' and document.ingestion_status == "COMPLETED" %}
                             <div style="display: flex; gap: var(--space-md); flex-wrap: wrap; margin-top: var(--space-xs);">
                                 <a href="/projects/{{ project.id }}/export/proposal" class="btn btn-secondary" style="padding: 0.6rem 1.25rem; font-size: 0.9rem; border-radius: var(--radius-sm);">
                                     📥 Download DOCX Proposal
@@ -267,7 +279,21 @@
                                             <div style="background: var(--surface-secondary); border: 1px solid var(--border-color); padding: var(--space-sm); border-radius: var(--radius-md); display: flex; flex-direction: column; gap: 4px;">
                                                 <div style="display: flex; justify-content: space-between; align-items: start; gap: var(--space-sm);">
                                                     <span style="font-size: 0.85rem; font-weight: 600; color: var(--text-primary); text-overflow: ellipsis; overflow: hidden; white-space: nowrap;">{{ doc.name }}</span>
-                                                    <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0;">{{ doc.approval_status }}</span>
+                                                    {% if doc.ingestion_status == "COMPLETED" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0;">{{ doc.approval_status }}</span>
+                                                    {% elif doc.ingestion_status == "QUARANTINED" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--surface-tertiary); border-color: var(--border-color); color: var(--text-secondary);">Upload received</span>
+                                                    {% elif doc.ingestion_status == "VALIDATING" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--surface-tertiary); border-color: var(--border-color); color: var(--text-secondary);">Validating document type</span>
+                                                    {% elif doc.ingestion_status == "SCANNING" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--surface-tertiary); border-color: var(--border-color); color: var(--text-secondary);">Awaiting security scan</span>
+                                                    {% elif doc.ingestion_status == "REJECTED_TYPE" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--status-needs-evidence-bg); border-color: rgba(180, 35, 24, 0.3); color: var(--status-needs-evidence);">Document rejected &mdash; upload a valid PDF or DOCX</span>
+                                                    {% elif doc.ingestion_status == "LEGACY_UNVERIFIED" %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--surface-tertiary); border-color: var(--border-color); color: var(--text-secondary);">Requires security reprocessing</span>
+                                                    {% else %}
+                                                        <span class="badge" style="font-size: 0.65rem; padding: 1px 4px; flex-shrink: 0; background: var(--surface-tertiary); border-color: var(--border-color); color: var(--text-secondary);">Pending security processing</span>
+                                                    {% endif %}
                                                 </div>
                                                 <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-muted);">
                                                     <span>Owner: {{ doc.owner_name or 'N/A' }}</span>
@@ -297,19 +323,9 @@
                                         <label for="k-tags" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Tags</label>
                                         <input type="text" id="k-tags" name="tags" placeholder="e.g. security, pricing" style="font-size: 0.85rem; border-radius: var(--radius-sm);">
                                     </div>
-                                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-sm);">
-                                        <div style="display: flex; flex-direction: column; gap: 4px;">
-                                            <label for="k-ver" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Version</label>
-                                            <input type="text" id="k-ver" name="version" value="1.0" style="font-size: 0.85rem; border-radius: var(--radius-sm);">
-                                        </div>
-                                        <div style="display: flex; flex-direction: column; gap: 4px;">
-                                            <label for="k-status" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Status</label>
-                                            <select id="k-status" name="approval_status" style="font-size: 0.85rem; border-radius: var(--radius-sm); background: var(--surface-secondary); color: var(--text-primary); border: 1px solid var(--border-color); padding: 0.45rem;">
-                                                <option value="APPROVED" selected>APPROVED</option>
-                                                <option value="PENDING">PENDING</option>
-                                                <option value="REJECTED">REJECTED</option>
-                                            </select>
-                                        </div>
+                                    <div style="display: flex; flex-direction: column; gap: 4px;">
+                                        <label for="k-ver" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Version</label>
+                                        <input type="text" id="k-ver" name="version" value="1.0" style="font-size: 0.85rem; border-radius: var(--radius-sm);">
                                     </div>
                                     <div style="display: flex; flex-direction: column; gap: 4px;">
                                         <label for="k-date" style="font-size: 0.75rem; color: var(--text-secondary); font-weight: 600;">Next Review</label>
