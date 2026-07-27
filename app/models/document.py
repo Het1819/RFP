@@ -1,7 +1,16 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.models.base import Base
@@ -114,6 +123,14 @@ class Document(Base):
     cleanup_pending: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
+    parse_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    parse_attempt_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    parse_attempt_id: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    parse_error_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     pages: Mapped[list["DocumentPage"]] = relationship(
         "DocumentPage", back_populates="document", cascade="all, delete-orphan"
@@ -122,6 +139,11 @@ class Document(Base):
 
 class DocumentPage(Base):
     __tablename__ = "document_pages"
+    __table_args__ = (
+        UniqueConstraint(
+            "document_id", "page_number", name="uq_document_pages_doc_id_page_num"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
     document_id: Mapped[uuid.UUID] = mapped_column(
@@ -129,5 +151,8 @@ class DocumentPage(Base):
     )
     page_number: Mapped[int] = mapped_column(Integer, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    unit_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    source_locator: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     document: Mapped[Document] = relationship("Document", back_populates="pages")
