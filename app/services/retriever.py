@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.services.evidence_validation import SNIPPET_MAX_LEN, SNIPPET_MIN_LEN
+from app.services.ingestion_state import IngestionStatus
 
 
 def _retrieve_evidence_postgresql(
@@ -30,6 +31,7 @@ def _retrieve_evidence_postgresql(
           AND d.doc_role = 'knowledge_base'
           AND d.approval_status = 'APPROVED'
           AND d.processing_status = 'completed'
+          AND d.ingestion_status = :completed_status
           AND to_tsvector('english', dp.content) @@ plainto_tsquery('english', :query)
         ORDER BY score DESC
         LIMIT :limit
@@ -38,7 +40,12 @@ def _retrieve_evidence_postgresql(
     rows = (
         db.execute(
             sql,
-            {"project_id": project_id, "query": clean_query, "limit": limit},
+            {
+                "project_id": project_id,
+                "query": clean_query,
+                "limit": limit,
+                "completed_status": IngestionStatus.COMPLETED,
+            },
         )
         .mappings()
         .all()
@@ -74,6 +81,7 @@ def _retrieve_evidence_sqlite(
             Document.doc_role == "knowledge_base",
             Document.approval_status == "APPROVED",
             Document.processing_status == "completed",
+            Document.ingestion_status == IngestionStatus.COMPLETED,
         )
         .limit(limit)
     )

@@ -30,6 +30,16 @@ class MetricsRegistry:
     llm_estimated_cost: ClassVar[float] = 0.0
     evidence_validation_failures: ClassVar[int] = 0
 
+    # Session/auth telemetry. Counters only -- no email, session id, password,
+    # cookie value, or org-sensitive data is ever attached as a label.
+    session_creations: ClassVar[int] = 0
+    session_idle_expirations: ClassVar[int] = 0
+    session_absolute_expirations: ClassVar[int] = 0
+    session_logout_revocations: ClassVar[int] = 0
+    session_admin_revocations: ClassVar[int] = 0
+    session_store_failures: ClassVar[int] = 0
+    login_throttle_decisions: ClassVar[dict[str, int]] = {}
+
 
 class JSONFormatter(logging.Formatter):
     """Structured JSON logging formatter to record application logs safely."""
@@ -345,5 +355,53 @@ def generate_prometheus_metrics(db: Session) -> str:
         m_type="counter",
         help_text="Aggregated cost of all LLM calls in USD",
     )
+
+    # Session lifecycle telemetry (in-memory counters, no PII in labels).
+    add_metric(
+        "session_creations_total",
+        MetricsRegistry.session_creations,
+        m_type="counter",
+        help_text="Total server-side sessions created",
+    )
+    add_metric(
+        "session_expirations_total",
+        MetricsRegistry.session_idle_expirations,
+        {"reason": "idle"},
+        "counter",
+        "Total sessions expired by idle timeout",
+    )
+    add_metric(
+        "session_expirations_total",
+        MetricsRegistry.session_absolute_expirations,
+        {"reason": "absolute"},
+        "counter",
+    )
+    add_metric(
+        "session_revocations_total",
+        MetricsRegistry.session_logout_revocations,
+        {"reason": "logout"},
+        "counter",
+        "Total sessions revoked",
+    )
+    add_metric(
+        "session_revocations_total",
+        MetricsRegistry.session_admin_revocations,
+        {"reason": "admin"},
+        "counter",
+    )
+    add_metric(
+        "session_store_failures_total",
+        MetricsRegistry.session_store_failures,
+        m_type="counter",
+        help_text="Total session-store (Redis) operation failures",
+    )
+    for decision, count in MetricsRegistry.login_throttle_decisions.items():
+        add_metric(
+            "login_throttle_decisions_total",
+            count,
+            {"decision": decision},
+            "counter",
+            "Total login-throttle decisions by outcome",
+        )
 
     return "\n".join(metrics) + "\n"

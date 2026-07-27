@@ -1,51 +1,275 @@
+# Production-like Docker Compose stack (Phases A3 + A4 + A5c).
+#
+# Topology:
+#   Internet/host --(80/443 only)--> nginx --(backend network)--> app:8000
+#                                                                    |
+#                                                    postgres, redis, worker
+#                                                                    |
+#                                                                  clamd
+#
+# nginx is the ONLY service with published host ports. app/worker/postgres/
+# redis/clamd join only the private "backend" network and are unreachable
+# from the host or the public internet. See DEPLOYMENT.md for the full edge
+# threat model.
+#
+# All application/database/Redis/Anthropic secrets are Docker Compose
+# file-based secrets read from ./secrets/ (gitignored; never committed).
+# nginx receives ONLY its TLS certificate/key -- never any application,
+# database, Redis, or Anthropic secret. `clamd` receives NO secrets at all
+# (see the `clamd` service below); only `worker` talks to it, over the
+# network.
+#
+# Generate local validation secrets with:
+#   uv run python scripts/generate_local_prod_secrets.py
+#   uv run python scripts/generate_local_prod_secrets.py --import-anthropic-key
+#   uv run python scripts/generate_local_tls_cert.py --hostname localhost
+#
+# You must separately provide ./secrets/anthropic_api_key.txt and set
+# non-secret env vars (LLM_MODEL, NGINX_SERVER_NAME, ALLOWED_HOSTS,
+# PUBLIC_BASE_URL) to match your local validation hostname.
+#
+# Local Compose secret FILES are mounted files on disk -- this is NOT an
+# enterprise secret manager and is NOT proof of encrypted storage.
+
 services:
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    networks:
+      edge:
+      backend:
+        ipv4_address: ${NGINX_BACKEND_IP:-172.28.0.10}
+    ports:
+      - "${EDGE_HTTP_BIND:-0.0.0.0}:${EDGE_HTTP_PORT:-80}:8080"
+      - "${EDGE_HTTPS_BIND:-0.0.0.0}:${EDGE_HTTPS_PORT:-443}:8443"
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-localhost}
+    secrets:
+      - tls_cert
+      - tls_key
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Explicit uid/gid/mode: the base image's nginx user is uid/gid 101, and
+    # Compose's tmpfs short syntax mounts root-owned, non-world-writable
+    # tmpfs by default -- without this, the non-root nginx process (and the
+    # base image's own envsubst-templating entrypoint step) cannot write
+    # into these paths despite the mount existing.
+    tmpfs:
+      - /tmp:size=32m,uid=101,gid=101,mode=1700
+      - /etc/nginx/conf.d:size=1m,uid=101,gid=101,mode=1700
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: on-failure:3
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
+    networks:
+      - backend
+    expose:
+      - "8000"
     environment:
-      - APP_ENV=production
-      - AUTH_MODE=session
-      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
-      - DATABASE_URL=postgresql+psycopg://rfp_user:rfp_password@postgres:5432/rfp_architect
-      - REDIS_URL=redis://redis:6379/0
-      - QUEUE_ENABLED=true
-      - LLM_PROVIDER=fake
+      APP_ENV: production
+      AUTH_MODE: session
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: rfp_architect
+      DB_USER: rfp_user
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      QUEUE_ENABLED: "true"
+      LLM_PROVIDER: anthropic
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-6}
+      ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_PATH: /data/storage
+      QUARANTINE_STORAGE_PATH: /data/quarantine
+      SESSION_COOKIE_NAME: __Host-rfp_session
+      TRUSTED_PROXY_IPS: ${NGINX_BACKEND_IP:-172.28.0.10}
+      ALLOWED_HOSTS: ${NGINX_SERVER_NAME:-localhost}
+      ALLOW_LOOPBACK_HOST: ${ALLOW_LOOPBACK_HOST:-false}
+      PUBLIC_BASE_URL: https://${NGINX_SERVER_NAME:-localhost}
+      APP_SECRET_KEY_FILE: /run/secrets/app_secret
+      SESSION_SECRET_KEY_FILE: /run/secrets/session_secret
+      LOGIN_THROTTLE_SECRET_FILE: /run/secrets/throttle_secret
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+    secrets:
+      - app_secret
+      - session_secret
+      - throttle_secret
+      - postgres_password
+      - redis_password
+      - anthropic_api_key
+    volumes:
+      - app_storage:/data/storage
+      # Quarantine storage is mounted into `app` (read-write, so it can
+      # write newly-uploaded files) and into `worker` (read-only, see the
+      # `worker` service below) -- never into `nginx`, `postgres`, or
+      # `redis`. As of A5c, `worker` runs the malware/content-policy
+      # scanning stage and needs to read quarantined files to scan them;
+      # it must never be able to write into quarantine storage.
+      - quarantine_storage:/data/quarantine
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
+      # `app` never talks to clamd directly (only `worker` does), but its
+      # own /readyz reports clamd connectivity (see DEPLOYMENT.md "9b.
+      # Malware Scanning" for why /readyz intentionally couples to
+      # scanner health). Without this, cold start is racy: nginx's
+      # depends_on app:service_healthy could pass/fail before clamd
+      # finishes its up-to-90s first-run signature download, purely by
+      # timing, since nothing ordered app's startup against clamd's.
+      clamd:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    # Capped restarts: a permanent configuration failure (e.g. a missing
+    # secret) must not spin the container forever -- it exits fast (config
+    # validation fails at Settings() construction) and stops after 3 tries
+    # so the failure is visible instead of buried in an endless loop.
+    restart: on-failure:3
 
   worker:
     build:
       context: .
       dockerfile: Dockerfile
     command: ["arq", "app.worker.WorkerSettings"]
+    networks:
+      - backend
+      - parser_net
     environment:
-      - APP_ENV=production
-      - AUTH_MODE=session
-      - SESSION_SECRET_KEY=${SESSION_SECRET_KEY}
-      - DATABASE_URL=postgresql+psycopg://rfp_user:rfp_password@postgres:5432/rfp_architect
-      - REDIS_URL=redis://redis:6379/0
-      - QUEUE_ENABLED=true
-      - LLM_PROVIDER=fake
+      APP_ENV: production
+      # AUTH_MODE/session/throttle/trusted-proxy config is not functionally
+      # used by the worker process, but it imports the same
+      # app.core.config.Settings class as the web app, and Settings'
+      # production validators are not (yet) process-role-aware -- they
+      # require these fields unconditionally in production regardless of
+      # which process constructs Settings(). Narrowing this is a
+      # documented follow-up (see PR description); for now the worker
+      # mounts the same secret set and config as the app rather than
+      # silently working around shared validation.
+      AUTH_MODE: session
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: rfp_architect
+      DB_USER: rfp_user
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      QUEUE_ENABLED: "true"
+      LLM_PROVIDER: anthropic
+      LLM_MODEL: ${LLM_MODEL:-claude-sonnet-4-6}
+      ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: "false"
+      STORAGE_BACKEND: local
+      LOCAL_STORAGE_PATH: /data/storage
+      # QUARANTINE_STORAGE_PATH: as of A5c, the worker mounts
+      # quarantine_storage read-only (see `volumes:` below) and reads
+      # quarantined files from this path to run malware/content-policy
+      # scanning. It must match the mount target below.
+      QUARANTINE_STORAGE_PATH: /data/quarantine
+      # CLAMAV_*: the worker is the only service that talks to `clamd`
+      # (over the network, via INSTREAM -- it never gets a filesystem
+      # mount of clamd's signature database). CLAMAV_HOST points at the
+      # `clamd` service name on the backend network; the remaining
+      # CLAMAV_* settings use application defaults (see app/core/config.py)
+      # and are not overridden here.
+      CLAMAV_HOST: clamd
+      SESSION_COOKIE_NAME: __Host-rfp_session
+      TRUSTED_PROXY_IPS: ${NGINX_BACKEND_IP:-172.28.0.10}
+      ALLOWED_HOSTS: ${NGINX_SERVER_NAME:-localhost}
+      ALLOW_LOOPBACK_HOST: ${ALLOW_LOOPBACK_HOST:-false}
+      PUBLIC_BASE_URL: https://${NGINX_SERVER_NAME:-localhost}
+      APP_SECRET_KEY_FILE: /run/secrets/app_secret
+      SESSION_SECRET_KEY_FILE: /run/secrets/session_secret
+      LOGIN_THROTTLE_SECRET_FILE: /run/secrets/throttle_secret
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      REDIS_PASSWORD_FILE: /run/secrets/redis_password
+      ANTHROPIC_API_KEY_FILE: /run/secrets/anthropic_api_key
+    secrets:
+      - app_secret
+      - session_secret
+      - throttle_secret
+      - postgres_password
+      - redis_password
+      - anthropic_api_key
+    volumes:
+      - app_storage:/data/storage
+      # Read-only: worker only ever reads quarantined files to scan them,
+      # never writes into quarantine storage. See the `app` service's
+      # quarantine-mount comment above for the read/write split rationale.
+      - quarantine_storage:/data/quarantine:ro
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
-    restart: unless-stopped
+      clamd:
+        condition: service_healthy
+    # NOTE (worker readiness limitation): arq has no built-in HTTP
+    # endpoint, so there is no real readiness probe here -- Docker can only
+    # tell you the process is alive, not that it is actually connected to
+    # Redis and processing jobs. Verify with `docker compose logs worker`
+    # and by checking that queued jobs transition out of QUEUED. A real
+    # worker health signal is a recommended follow-up.
+    restart: on-failure:3
+
+  parser:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["uvicorn", "app.parser_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      PYTHONPATH: /app
+    networks:
+      - parser_net
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    user: "10001:10001"
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+        reservations:
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8000/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: on-failure:3
 
   postgres:
-    image: pgvector/pgvector:pg16
+    # pgvector/pgvector:pg16, resolved 2026-07-24 via
+    # `docker pull pgvector/pgvector:pg16`.
+    image: pgvector/pgvector:pg16@sha256:1d533553fefe4f12e5d80c7b80622ba0c382abb5758856f52983d8789179f0fb
+    networks:
+      - backend
     environment:
       POSTGRES_DB: rfp_architect
       POSTGRES_USER: rfp_user
-      POSTGRES_PASSWORD: rfp_password
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    secrets:
+      - postgres_password
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -54,19 +278,103 @@ services:
       timeout: 5s
       retries: 20
     restart: unless-stopped
+    # No `ports:` -- PostgreSQL is reachable only from other containers on
+    # the backend network, never from the host or the public internet.
 
   redis:
-    image: redis:7-alpine
-    command: redis-server --appendonly yes
+    # redis:7-alpine, resolved 2026-07-24 via `docker pull redis:7-alpine`.
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
+    networks:
+      - backend
+    # Config (including `requirepass`) comes from a mounted secret file,
+    # not a CLI argument or environment variable -- so the password never
+    # appears in `docker inspect`'s static Config.Cmd/Config.Env, and
+    # `--appendonly yes` inside that same file keeps AOF persistence on.
+    command: ["redis-server", "/run/secrets/redis_conf"]
+    secrets:
+      - redis_conf
+      - redis_password
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$(cat /run/secrets/redis_password)\" --no-auth-warning ping | grep -q PONG"]
       interval: 5s
       timeout: 5s
       retries: 20
     restart: unless-stopped
+    # No `ports:` -- Redis is reachable only from other containers on the
+    # backend network, never from the host or the public internet.
+
+  clamd:
+    image: clamav/clamav@sha256:e7ead98e7e07231b151bce988e0cfb0a3b46e6e7046d9dd44fd838c0df724a03
+    # clamav/clamav:1.4, resolved 2026-07-26 via `docker pull clamav/clamav:1.4`.
+    # ClamAV 1.4.5 at resolution time (freshclam updates signatures inside
+    # the running container on its own schedule; the pinned image tag is
+    # the engine version, not the signature database version -- see
+    # DEPLOYMENT.md for the signature-staleness policy this depends on).
+    networks:
+      - backend
+    volumes:
+      - clamav_signatures:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/clamdcheck.sh"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s  # freshclam's first signature download can take a while
+    security_opt:
+      - no-new-privileges:true
+    restart: on-failure:3
+    # No `ports:`, no `secrets:`, no application/session/DB/Redis/Anthropic
+    # env vars -- clamd receives only bytes over the backend network (via
+    # INSTREAM, from `worker`) and never a filesystem mount of quarantine
+    # or app storage.
+
+networks:
+  # Faces the host's published ports (nginx only). Not joined by app,
+  # worker, postgres, or redis.
+  edge:
+    driver: bridge
+  # Private network for nginx<->app<->postgres/redis/worker. Explicit
+  # subnet so nginx can be assigned a deterministic IP that the app trusts
+  # as its ONLY forwarded-header source (see app.core.client_ip). The
+  # subnet is configurable (BACKEND_SUBNET) to avoid colliding with another
+  # Compose project's network on the same Docker host.
+  backend:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: ${BACKEND_SUBNET:-172.28.0.0/24}
+  # Isolated internal network shared strictly between worker and parser.
+  # Has no internet gateway (internal: true) and is not joined by app, nginx,
+  # postgres, or redis.
+  parser_net:
+    driver: bridge
+    internal: true
 
 volumes:
   postgres_data:
   redis_data:
+  app_storage:
+  quarantine_storage:
+  clamav_signatures:
+
+secrets:
+  app_secret:
+    file: ./secrets/app_secret.txt
+  session_secret:
+    file: ./secrets/session_secret.txt
+  throttle_secret:
+    file: ./secrets/throttle_secret.txt
+  postgres_password:
+    file: ./secrets/postgres_password.txt
+  redis_password:
+    file: ./secrets/redis_password.txt
+  redis_conf:
+    file: ./secrets/redis.conf
+  anthropic_api_key:
+    file: ./secrets/anthropic_api_key.txt
+  tls_cert:
+    file: ./secrets/tls_cert.pem
+  tls_key:
+    file: ./secrets/tls_key.pem
