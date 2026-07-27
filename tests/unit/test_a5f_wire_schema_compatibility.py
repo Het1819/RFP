@@ -25,6 +25,7 @@ from app.services.anthropic_extractor import (
     build_wire_schema,
 )
 from app.services.extraction_contract import (
+    ALLOWED_REQUIREMENT_TYPES,
     MAX_CANDIDATES_PER_DOCUMENT,
     MAX_REQUIREMENT_TEXT_LEN,
     MAX_UNCERTAINTY_REASON_LEN,
@@ -185,13 +186,32 @@ def test_schema_is_json_serializable(schema):
 # ---------------------------------------------------------------------------
 
 
+class _Block:
+    def __init__(self, text: str) -> None:
+        self.type = "text"
+        self.text = text
+
+
+class _Usage:
+    input_tokens = 1234
+    output_tokens = 56
+    cache_creation_input_tokens = 78
+    cache_read_input_tokens = 90
+
+
 class _Msg:
-    def __init__(self, parsed: Any) -> None:
-        self.content = []
-        self.stop_reason = "end_turn"
-        self.usage = None
+    """A provider Message carrying a raw structured-output text block."""
+
+    def __init__(self, payload: str, stop_reason: str = "end_turn") -> None:
+        self.content = [_Block(payload)]
+        self.stop_reason = stop_reason
+        self.model = "claude-opus-5"
+        self.usage = _Usage()
         self._request_id = "req_x"
-        self.parsed_output = parsed
+
+
+def _payload(candidates: str = "[]") -> str:
+    return f'{{"schema_version": "{SCHEMA_VERSION}", "candidates": {candidates}}}'
 
 
 class _Messages:
@@ -199,14 +219,16 @@ class _Messages:
         self.outcome = outcome
         self.calls: list[dict[str, Any]] = []
 
-    def parse(self, **kwargs: Any) -> Any:
+    def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         if isinstance(self.outcome, Exception):
             raise self.outcome
         return self.outcome
 
-    def create(self, **kwargs: Any) -> Any:
-        raise AssertionError("adapter must use messages.parse()")
+    def parse(self, **kwargs: Any) -> Any:
+        raise AssertionError(
+            "adapter must use messages.create() -- parse() loses telemetry"
+        )
 
 
 class _Client:
@@ -237,17 +259,19 @@ def _request():
 
 
 def test_adapter_passes_pydantic_contract_as_output_format():
-    parsed = ExtractionResponse(schema_version=SCHEMA_VERSION, candidates=[])
     extractor = AnthropicRequirementExtractor(
-        api_key="k", model="claude-opus-5", client=_Client(_Msg(parsed))
+        api_key="k", model="claude-opus-5", client=_Client(_Msg(_payload()))
     )
     result = extractor.extract(_request())
 
     params = extractor._client.messages.calls[0]
-    assert params["output_format"] is ExtractionResponse
+    # The exact generated schema is sent; no hand-written copy, and no
+    # output_format (which would move validation back inside the SDK).
+    assert params["output_config"]["format"]["schema"] == build_wire_schema()
+    assert "output_format" not in params
     assert "tools" not in params
     assert params["max_tokens"] == settings.REQUIREMENT_EXTRACTION_MAX_OUTPUT_TOKENS
-    assert result is parsed
+    assert result.schema_version == SCHEMA_VERSION
 
 
 def test_adapter_sets_sdk_max_retries_zero(monkeypatch):
@@ -257,9 +281,7 @@ def test_adapter_sets_sdk_max_retries_zero(monkeypatch):
     class _FakeAnthropic:
         def __init__(self, **kwargs: Any) -> None:
             captured.update(kwargs)
-            self.messages = _Messages(
-                _Msg(ExtractionResponse(schema_version=SCHEMA_VERSION, candidates=[]))
-            )
+            self.messages = _Messages(_Msg(_payload()))
 
     import anthropic
 
@@ -289,6 +311,289 @@ def test_provider_call_ceiling_still_enforced(monkeypatch):
     with pytest.raises(ExtractionError):
         extractor.extract(_request())
     assert extractor.usage.provider_call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Telemetry survives local validation failure
+# ---------------------------------------------------------------------------
+# The second live canary lost usage, stop reason, duration and request ID
+# because SDK-side validation raised before the adapter saw the Message.
+# These tests pin the ordering that prevents a repeat.
+
+# Schema-valid JSON with one deliberately invalid downstream field: the wire
+# schema permits the shape, the contract rejects the confidence value.
+_CONTRACT_VIOLATING = (
+    f'{{"schema_version": "{SCHEMA_VERSION}", "candidates": ['
+    '{"source_unit_sequence": 1, "span_start": 0, "span_end": 10, '
+    '"requirement_text": "ok", "requirement_type": "compliance", '
+    '"confidence": 4.2, "uncertainty_reason": null}]}'
+)
+
+
+def _failing_extractor() -> AnthropicRequirementExtractor:
+    return AnthropicRequirementExtractor(
+        api_key="k",
+        model="claude-opus-5",
+        client=_Client(_Msg(_CONTRACT_VIOLATING)),
+    )
+
+
+def test_validation_failure_maps_to_response_invalid():
+    from app.services.anthropic_extractor import PROVIDER_RESPONSE_INVALID
+    from app.services.requirement_extractor import ExtractionError
+
+    extractor = _failing_extractor()
+    with pytest.raises(ExtractionError) as exc_info:
+        extractor.extract(_request())
+
+    # Not EXTRACTOR_FAILED: this is a provider-response defect, not an
+    # unexpected crash in our own code.
+    assert exc_info.value.code == PROVIDER_RESPONSE_INVALID
+
+
+def test_usage_recorded_before_local_validation():
+    from app.services.requirement_extractor import ExtractionError
+
+    extractor = _failing_extractor()
+    with pytest.raises(ExtractionError):
+        extractor.extract(_request())
+
+    assert extractor.usage.input_tokens == 1234
+    assert extractor.usage.output_tokens == 56
+    assert extractor.usage.cache_creation_input_tokens == 78
+    assert extractor.usage.cache_read_input_tokens == 90
+
+
+def test_request_id_and_stop_reason_retained_after_validation_error():
+    from app.services.requirement_extractor import ExtractionError
+
+    extractor = _failing_extractor()
+    with pytest.raises(ExtractionError):
+        extractor.extract(_request())
+
+    assert extractor.usage.request_ids == ["req_x"]
+    assert extractor.usage.stop_reason == "end_turn"
+    assert extractor.usage.response_model == "claude-opus-5"
+
+
+def test_duration_measured_on_validation_failure():
+    from app.services.requirement_extractor import ExtractionError
+
+    extractor = _failing_extractor()
+    with pytest.raises(ExtractionError):
+        extractor.extract(_request())
+
+    # The previous implementation left this at 0 whenever an error escaped.
+    assert extractor.usage.duration_ms >= 0
+    assert extractor.usage.provider_call_count == 1
+
+
+def test_duration_measured_on_api_exception():
+    from app.services.requirement_extractor import ExtractionError
+
+    err = _status_error(500, "server error")
+    extractor = AnthropicRequirementExtractor(
+        api_key="k", model="claude-opus-5", client=_Client(err)
+    )
+    with pytest.raises(ExtractionError):
+        extractor.extract(_request())
+    assert extractor.usage.duration_ms >= 0
+
+
+def test_validation_failure_is_not_retried(monkeypatch):
+    monkeypatch.setattr(settings, "REQUIREMENT_EXTRACTION_MAX_RETRIES", 3)
+    monkeypatch.setattr(settings, "REQUIREMENT_EXTRACTION_MAX_PROVIDER_CALLS", 5)
+    monkeypatch.setattr("app.services.anthropic_extractor.time.sleep", lambda _s: None)
+
+    from app.services.requirement_extractor import ExtractionError
+
+    extractor = _failing_extractor()
+    with pytest.raises(ExtractionError):
+        extractor.extract(_request())
+    assert extractor.usage.provider_call_count == 1
+
+
+def test_validation_diagnostic_names_fields_not_values(caplog):
+    import logging
+
+    from app.services.requirement_extractor import ExtractionError
+
+    extractor = _failing_extractor()
+    with caplog.at_level(logging.ERROR, logger="app.services.anthropic_extractor"):
+        with pytest.raises(ExtractionError):
+            extractor.extract(_request())
+
+    blob = "\n".join(r.getMessage() for r in caplog.records)
+    # Field location and error type are useful and safe.
+    assert "confidence" in blob
+    # The rejected value and the response body are not.
+    assert "4.2" not in blob
+    assert "requirement_text" not in blob or "ok" not in blob
+    assert _CONTRACT_VIOLATING not in blob
+
+
+def test_validation_error_summary_is_locations_and_types_only():
+    from pydantic import ValidationError as PydanticValidationError
+
+    from app.services.anthropic_extractor import _validation_error_summary
+
+    try:
+        ExtractionResponse.model_validate_json(_CONTRACT_VIOLATING)
+    except PydanticValidationError as err:
+        summary = _validation_error_summary(err)
+    else:  # pragma: no cover - the payload is deliberately invalid
+        pytest.fail("payload should not validate")
+
+    assert "confidence" in summary
+    assert "4.2" not in summary
+
+
+# ---------------------------------------------------------------------------
+# Stop reason and content shape fail closed before validation
+# ---------------------------------------------------------------------------
+
+
+def test_refusal_fails_closed_before_validation():
+    from app.services.anthropic_extractor import PROVIDER_RESPONSE_INVALID
+    from app.services.requirement_extractor import ExtractionError
+
+    extractor = AnthropicRequirementExtractor(
+        api_key="k",
+        model="claude-opus-5",
+        client=_Client(_Msg(_payload(), stop_reason="refusal")),
+    )
+    with pytest.raises(ExtractionError) as exc_info:
+        extractor.extract(_request())
+    assert exc_info.value.code == PROVIDER_RESPONSE_INVALID
+    # Telemetry still captured even though the turn was refused.
+    assert extractor.usage.stop_reason == "refusal"
+    assert extractor.usage.request_ids == ["req_x"]
+
+
+def test_incomplete_generation_fails_closed():
+    from app.services.anthropic_extractor import PROVIDER_OUTPUT_LIMIT
+    from app.services.requirement_extractor import ExtractionError
+
+    extractor = AnthropicRequirementExtractor(
+        api_key="k",
+        model="claude-opus-5",
+        client=_Client(_Msg('{"schema_version": "req', stop_reason="max_tokens")),
+    )
+    with pytest.raises(ExtractionError) as exc_info:
+        extractor.extract(_request())
+    assert exc_info.value.code == PROVIDER_OUTPUT_LIMIT
+    assert extractor.usage.stop_reason == "max_tokens"
+
+
+def test_empty_content_fails_closed():
+    from app.services.anthropic_extractor import PROVIDER_RESPONSE_INCOMPLETE
+    from app.services.requirement_extractor import ExtractionError
+
+    message = _Msg(_payload())
+    message.content = []
+    extractor = AnthropicRequirementExtractor(
+        api_key="k", model="claude-opus-5", client=_Client(message)
+    )
+    with pytest.raises(ExtractionError) as exc_info:
+        extractor.extract(_request())
+    assert exc_info.value.code == PROVIDER_RESPONSE_INCOMPLETE
+
+
+def test_multiple_text_blocks_fail_closed():
+    from app.services.anthropic_extractor import PROVIDER_RESPONSE_INCOMPLETE
+    from app.services.requirement_extractor import ExtractionError
+
+    message = _Msg(_payload())
+    message.content = [_Block(_payload()), _Block(_payload())]
+    extractor = AnthropicRequirementExtractor(
+        api_key="k", model="claude-opus-5", client=_Client(message)
+    )
+    with pytest.raises(ExtractionError) as exc_info:
+        extractor.extract(_request())
+    assert exc_info.value.code == PROVIDER_RESPONSE_INCOMPLETE
+
+
+def test_blank_text_block_fails_closed():
+    from app.services.anthropic_extractor import PROVIDER_RESPONSE_INCOMPLETE
+    from app.services.requirement_extractor import ExtractionError
+
+    extractor = AnthropicRequirementExtractor(
+        api_key="k", model="claude-opus-5", client=_Client(_Msg("   "))
+    )
+    with pytest.raises(ExtractionError) as exc_info:
+        extractor.extract(_request())
+    assert exc_info.value.code == PROVIDER_RESPONSE_INCOMPLETE
+
+
+def test_malformed_json_fails_closed():
+    from app.services.anthropic_extractor import PROVIDER_RESPONSE_INVALID
+    from app.services.requirement_extractor import ExtractionError
+
+    extractor = AnthropicRequirementExtractor(
+        api_key="k", model="claude-opus-5", client=_Client(_Msg("not json"))
+    )
+    with pytest.raises(ExtractionError) as exc_info:
+        extractor.extract(_request())
+    assert exc_info.value.code == PROVIDER_RESPONSE_INVALID
+
+
+# ---------------------------------------------------------------------------
+# requirement_type vocabulary
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", sorted(ALLOWED_REQUIREMENT_TYPES))
+def test_every_canonical_requirement_type_validates(value):
+    unit = CandidateUnit(
+        source_unit_sequence=1,
+        span_start=0,
+        span_end=5,
+        requirement_text="ok",
+        requirement_type=value,
+    )
+    assert unit.requirement_type == value
+
+
+@pytest.mark.parametrize(
+    "value", ["mandatory", "Functional", "FUNCTIONAL", "non-functional", ""]
+)
+def test_unknown_or_miscased_requirement_type_rejected(value):
+    from pydantic import ValidationError as PydanticValidationError
+
+    with pytest.raises(PydanticValidationError):
+        CandidateUnit(
+            source_unit_sequence=1,
+            span_start=0,
+            span_end=5,
+            requirement_text="ok",
+            requirement_type=value,
+        )
+
+
+def test_requirement_type_enum_in_pydantic_schema():
+    raw = ExtractionResponse.model_json_schema()
+    field = raw["$defs"]["CandidateUnit"]["properties"]["requirement_type"]
+    enums = [b["enum"] for b in field["anyOf"] if "enum" in b]
+    assert len(enums) == 1
+    assert set(enums[0]) == ALLOWED_REQUIREMENT_TYPES
+
+
+def test_requirement_type_enum_survives_transform(schema):
+    field = schema["$defs"]["CandidateUnit"]["properties"]["requirement_type"]
+    branches = field["anyOf"]
+
+    enum_branches = [b for b in branches if "enum" in b]
+    assert len(enum_branches) == 1
+    assert set(enum_branches[0]["enum"]) == ALLOWED_REQUIREMENT_TYPES
+    assert enum_branches[0]["type"] == "string"
+
+    # Exactly one null branch, and no unconstrained string branch alongside it.
+    assert [b for b in branches if b.get("type") == "null"]
+    unconstrained = [
+        b for b in branches if b.get("type") == "string" and "enum" not in b
+    ]
+    assert unconstrained == [], "an unrestricted string branch would defeat the enum"
+    assert None not in enum_branches[0]["enum"]
 
 
 # ---------------------------------------------------------------------------
@@ -523,8 +828,7 @@ def test_schema_assertions_hold_offline(_no_network):
 
 
 def test_adapter_request_build_makes_no_network_call(_no_network):
-    parsed = ExtractionResponse(schema_version=SCHEMA_VERSION, candidates=[])
     extractor = AnthropicRequirementExtractor(
-        api_key="k", model="claude-opus-5", client=_Client(_Msg(parsed))
+        api_key="k", model="claude-opus-5", client=_Client(_Msg(_payload()))
     )
-    assert extractor.extract(_request()) is parsed
+    assert extractor.extract(_request()).schema_version == SCHEMA_VERSION

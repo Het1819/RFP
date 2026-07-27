@@ -27,7 +27,6 @@ from app.services.anthropic_extractor import (
 from app.services.extraction_contract import (
     SCHEMA_VERSION,
     ExtractionRequest,
-    ExtractionResponse,
     SourceUnit,
 )
 from app.services.extraction_prompt import (
@@ -104,26 +103,28 @@ class _Message:
 class _Messages:
     """Stands in for client.messages, recording what the adapter sends.
 
-    The adapter calls .parse(); .create() is kept so a regression back to it
-    is caught by the assertion below rather than silently passing.
+    The adapter calls .create(); .parse() raises so a regression back to it is
+    caught loudly. parse() validates inside the SDK and raises before returning
+    the Message, which destroys response telemetry -- that is the defect this
+    module exists to prevent recurring.
     """
 
     def __init__(self, outcomes: list[Any]) -> None:
         self._outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
 
-    def parse(self, **kwargs: Any) -> Any:
+    def create(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         outcome = self._outcomes.pop(0) if self._outcomes else _Message()
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
 
-    def create(self, **kwargs: Any) -> Any:
+    def parse(self, **kwargs: Any) -> Any:
         raise AssertionError(
-            "adapter must call messages.parse(), not messages.create() -- "
-            "create() bypasses the SDK schema transform and sends unsupported "
-            "keywords"
+            "adapter must call messages.create(), not messages.parse() -- "
+            "parse() validates inside the SDK and loses response telemetry "
+            "when validation fails"
         )
 
 
@@ -257,10 +258,13 @@ def test_request_uses_strict_structured_output_and_no_tools():
     assert "tool_choice" not in params
     assert "mcp_servers" not in params
 
-    # The Pydantic contract is handed to the SDK, which derives the wire schema
-    # itself. No hand-built schema is passed, so there is nothing to drift.
-    assert params["output_format"] is ExtractionResponse
-    assert "format" not in params["output_config"]
+    # The schema is generated from the Pydantic contract and sent explicitly,
+    # so validation timing stays under our control while the contract remains
+    # the single authoritative source.
+    fmt = params["output_config"]["format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["schema"] == build_wire_schema()
+    assert "output_format" not in params
     assert params["output_config"]["effort"] == settings.REQUIREMENT_EXTRACTOR_EFFORT
 
 

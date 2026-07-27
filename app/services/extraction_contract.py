@@ -15,7 +15,7 @@ Schema version: requirement-candidates-v1
 from __future__ import annotations
 
 import re
-from typing import Annotated
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -27,18 +27,33 @@ MAX_REQUIREMENT_TEXT_LEN = 2000
 MAX_EVIDENCE_TEXT_LEN = 4000
 MAX_UNCERTAINTY_REASON_LEN = 500
 
-ALLOWED_REQUIREMENT_TYPES = frozenset(
-    {
-        "functional",
-        "non_functional",
-        "compliance",
-        "security",
-        "performance",
-        "interface",
-        "operational",
-        "other",
-    }
-)
+# The accepted requirement-type vocabulary.
+#
+# Declared as a Literal rather than enforced by an imperative validator so the
+# values reach the generated JSON Schema, and therefore the wire schema sent to
+# the provider. That distinction is not cosmetic: a validator is invisible to
+# schema generation, so the model was previously handed an unconstrained string
+# field, returned a plausible value outside this set, and the strict contract
+# then rejected the *entire* response -- discarding every valid candidate
+# alongside the one bad field. Constraining it on the wire lets the model get
+# it right instead of being rejected afterwards.
+#
+# Order is fixed and meaningful: it is the enum order on the wire, and the wire
+# schema must serialize deterministically for prompt-cache stability.
+RequirementType = Literal[
+    "functional",
+    "non_functional",
+    "compliance",
+    "security",
+    "performance",
+    "interface",
+    "operational",
+    "other",
+]
+
+# Retained for callers that need membership checks (audit, tests, reporting).
+# Derived from the Literal so the two can never drift apart.
+ALLOWED_REQUIREMENT_TYPES = frozenset(get_args(RequirementType))
 
 
 class CandidateUnit(BaseModel):
@@ -56,20 +71,14 @@ class CandidateUnit(BaseModel):
     requirement_text: Annotated[
         str, Field(min_length=1, max_length=MAX_REQUIREMENT_TEXT_LEN)
     ]
-    requirement_type: Annotated[str | None, Field(default=None)]
+    # Literal, not str: membership is enforced by the type so it appears in the
+    # generated schema. The imperative validator this replaces enforced the
+    # same set but left nothing behind for schema generation to emit.
+    requirement_type: Annotated[RequirementType | None, Field(default=None)]
     confidence: Annotated[float | None, Field(default=None, ge=0.0, le=1.0)]
     uncertainty_reason: Annotated[
         str | None, Field(default=None, max_length=MAX_UNCERTAINTY_REASON_LEN)
     ]
-
-    @field_validator("requirement_type")
-    @classmethod
-    def validate_requirement_type(cls, v: str | None) -> str | None:
-        if v is not None and v not in ALLOWED_REQUIREMENT_TYPES:
-            raise ValueError(
-                f"requirement_type must be one of {sorted(ALLOWED_REQUIREMENT_TYPES)}"
-            )
-        return v
 
     @model_validator(mode="after")
     def validate_span_order(self) -> CandidateUnit:

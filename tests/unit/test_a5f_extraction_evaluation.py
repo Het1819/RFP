@@ -76,11 +76,10 @@ class _Message:
 class _RecordingClient:
     """Captures the exact prompt sent, so the harness can inspect it.
 
-    Returns a message with no `parsed_output`, so the adapter falls through to
-    parsing the raw text block. That is deliberate: the harness needs to
-    exercise the strict contract against arbitrary payloads (malformed JSON,
-    unknown fields, wrong schema version), which a pre-parsed SDK response
-    could never carry.
+    Returns the raw payload as a text block so the adapter runs its own
+    contract validation. That is deliberate: the harness needs to exercise the
+    strict contract against arbitrary payloads (malformed JSON, unknown fields,
+    wrong schema version) that a pre-validated response could never carry.
     """
 
     def __init__(self, payload: str) -> None:
@@ -88,12 +87,14 @@ class _RecordingClient:
         self.last_params: dict | None = None
         self.messages = self
 
-    def parse(self, **kwargs):
+    def create(self, **kwargs):
         self.last_params = kwargs
         return _Message(self._payload)
 
-    def create(self, **kwargs):
-        raise AssertionError("adapter must use messages.parse()")
+    def parse(self, **kwargs):
+        raise AssertionError(
+            "adapter must use messages.create() -- parse() loses telemetry"
+        )
 
 
 def _build_extractor(case: EvalCase):

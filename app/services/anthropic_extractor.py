@@ -40,6 +40,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import ValidationError
+
 from app.core.config import settings
 from app.services.extraction_contract import (
     SCHEMA_VERSION,
@@ -101,6 +103,10 @@ class ProviderUsage:
     cache_read_input_tokens: int = 0
     duration_ms: int = 0
     request_ids: list[str] = field(default_factory=list)
+    # Captured before any local validation runs, so a contract failure still
+    # leaves an operator the model, the stop reason and the correlation id.
+    stop_reason: str | None = None
+    response_model: str | None = None
 
 
 def _sanitized_provider_detail(err: Exception, limit: int = 300) -> str:
@@ -114,6 +120,25 @@ def _sanitized_provider_detail(err: Exception, limit: int = 300) -> str:
     text = str(getattr(err, "message", "") or err)
     collapsed = " ".join(text.split())
     return collapsed[:limit]
+
+
+def _validation_error_summary(err: ValidationError, limit: int = 12) -> str:
+    """Summarize a contract failure as error types and field locations only.
+
+    Deliberately excludes the rejected values and Pydantic's rendered message,
+    both of which quote the offending input -- and that input is model output
+    derived from an untrusted document. An operator needs to know *which field*
+    failed and *how*, which this gives them; they do not need the payload in
+    the log to act on it.
+    """
+    parts: list[str] = []
+    for item in err.errors()[:limit]:
+        location = ".".join(str(piece) for piece in item.get("loc", ()))
+        parts.append(f"{location or '<root>'}:{item.get('type', 'unknown')}")
+    total = len(err.errors())
+    if total > limit:
+        parts.append(f"(+{total - limit} more)")
+    return ", ".join(parts)
 
 
 def _looks_like_schema_rejection(err: Exception) -> bool:
@@ -224,36 +249,41 @@ class AnthropicRequirementExtractor(RequirementExtractor):
 
         last_error: ExtractionError | None = None
 
-        for attempt in range(max_attempts):
-            if self.usage.provider_call_count >= max_calls:
-                break
-            try:
-                response = self._call_once(request)
-                self.usage.duration_ms = int((time.monotonic() - started) * 1000)
-                return response
-            except ExtractionError as err:
-                last_error = err
-                if err.code not in _TRANSIENT_CODES or attempt == max_attempts - 1:
+        # Duration is recorded in `finally` so it is measured identically for a
+        # success, a local validation failure, and an API exception. The
+        # previous implementation assigned it only on the paths that returned
+        # or raised ExtractionError, so an escaping error left duration at 0.
+        try:
+            for attempt in range(max_attempts):
+                if self.usage.provider_call_count >= max_calls:
                     break
-                delay = min(
-                    settings.REQUIREMENT_EXTRACTION_RETRY_BASE_SECONDS * (2**attempt),
-                    settings.REQUIREMENT_EXTRACTION_RETRY_MAX_SECONDS,
-                )
-                # Full jitter: spreads retries so a provider blip does not turn
-                # into a synchronised thundering herd across workers.
-                delay = random.uniform(0, delay)
-                logger.warning(
-                    "extraction.provider_retry: run_id=%s attempt=%d code=%s",
-                    request.extraction_run_id,
-                    attempt + 1,
-                    err.code,
-                )
-                time.sleep(delay)
+                try:
+                    return self._call_once(request)
+                except ExtractionError as err:
+                    last_error = err
+                    if err.code not in _TRANSIENT_CODES or attempt == max_attempts - 1:
+                        break
+                    delay = min(
+                        settings.REQUIREMENT_EXTRACTION_RETRY_BASE_SECONDS
+                        * (2**attempt),
+                        settings.REQUIREMENT_EXTRACTION_RETRY_MAX_SECONDS,
+                    )
+                    # Full jitter: spreads retries so a provider blip does not
+                    # turn into a synchronised thundering herd across workers.
+                    delay = random.uniform(0, delay)
+                    logger.warning(
+                        "extraction.provider_retry: run_id=%s attempt=%d code=%s",
+                        request.extraction_run_id,
+                        attempt + 1,
+                        err.code,
+                    )
+                    time.sleep(delay)
 
-        self.usage.duration_ms = int((time.monotonic() - started) * 1000)
-        raise last_error or ExtractionError(
-            PROVIDER_UNAVAILABLE, "Extraction produced no provider call"
-        )
+            raise last_error or ExtractionError(
+                PROVIDER_UNAVAILABLE, "Extraction produced no provider call"
+            )
+        finally:
+            self.usage.duration_ms = int((time.monotonic() - started) * 1000)
 
     def _call_once(self, request: ExtractionRequest) -> ExtractionResponse:
         client = self._get_client()
@@ -266,10 +296,10 @@ class AnthropicRequirementExtractor(RequirementExtractor):
             "messages": [
                 {"role": "user", "content": build_user_turn(request.source_units)}
             ],
-            # The SDK derives `output_config.format` from `output_format` and
-            # merges it into whatever is passed here, so effort survives.
-            "output_config": {"effort": settings.REQUIREMENT_EXTRACTOR_EFFORT},
-            "output_format": ExtractionResponse,
+            "output_config": {
+                "effort": settings.REQUIREMENT_EXTRACTOR_EFFORT,
+                "format": {"type": "json_schema", "schema": build_wire_schema()},
+            },
         }
         # `tools` is deliberately absent: no web search, no web fetch, no code
         # execution, no computer use. Do not add one without revisiting the
@@ -277,12 +307,17 @@ class AnthropicRequirementExtractor(RequirementExtractor):
 
         self.usage.provider_call_count += 1
         try:
-            # messages.parse() rather than messages.create(): the SDK builds the
-            # wire schema from the Pydantic contract, stripping the keywords the
-            # structured-output subset rejects, and validates the response back
-            # against that same contract. One authoritative schema, no
-            # hand-maintained wire copy to drift.
-            message = client.messages.parse(**params)
+            # messages.create(), not messages.parse(). parse() validates the
+            # response against the Pydantic contract *inside* the SDK and
+            # raises before returning the Message, which destroys the response
+            # telemetry -- the second canary lost usage, stop reason, duration
+            # and request ID exactly that way. create() hands back the Message
+            # first, so telemetry is captured before anything can reject it.
+            #
+            # The wire schema is still generated from the same Pydantic
+            # contract (build_wire_schema), so there is still exactly one
+            # authoritative domain schema; only the validation *timing* moves.
+            message = client.messages.create(**params)
         except anthropic.APITimeoutError as err:
             raise ExtractionError(
                 PROVIDER_TIMEOUT, "Provider request timed out"
@@ -334,10 +369,19 @@ class AnthropicRequirementExtractor(RequirementExtractor):
                 PROVIDER_UNAVAILABLE, "Could not reach the provider"
             ) from err
 
+        # Telemetry FIRST -- before stop-reason checks, before block
+        # extraction, before contract validation. Everything after this point
+        # can fail, and when it does an operator still gets the model, the
+        # token counts, the stop reason and the correlation id.
         self._record_usage(message)
         return self._parse_message(message)
 
     def _record_usage(self, message: Any) -> None:
+        self.usage.stop_reason = getattr(message, "stop_reason", None)
+        response_model = getattr(message, "model", None)
+        if isinstance(response_model, str) and response_model:
+            self.usage.response_model = response_model
+
         usage = getattr(message, "usage", None)
         if usage is not None:
             self.usage.input_tokens += int(getattr(usage, "input_tokens", 0) or 0)
@@ -376,48 +420,54 @@ class AnthropicRequirementExtractor(RequirementExtractor):
                 f"Provider stopped unexpectedly ({stop_reason})",
             )
 
-        # messages.parse() has already validated the payload against the
-        # Pydantic contract and exposes the instance here.
-        parsed = getattr(message, "parsed_output", None)
-        if isinstance(parsed, ExtractionResponse):
-            return parsed
-
-        # Fall back to parsing the text block. This covers a transport that
-        # returns an unparsed message -- including every mocked transport in
-        # the test suite -- and keeps the strict contract as the last word
-        # regardless of how the response arrived.
-        text = self._first_text_block(message)
-        if text is None:
+        # Exactly one structured-output text block is expected. A structured
+        # response that arrives with extra or non-text blocks is not something
+        # to guess at.
+        blocks = list(getattr(message, "content", None) or [])
+        if not blocks:
+            raise ExtractionError(
+                PROVIDER_RESPONSE_INCOMPLETE, "Provider returned empty content"
+            )
+        text_blocks = [b for b in blocks if getattr(b, "type", None) == "text"]
+        if not text_blocks:
             raise ExtractionError(
                 PROVIDER_RESPONSE_INCOMPLETE, "Provider returned no text content"
             )
+        if len(text_blocks) > 1:
+            raise ExtractionError(
+                PROVIDER_RESPONSE_INCOMPLETE,
+                f"Provider returned {len(text_blocks)} text blocks, expected 1",
+            )
 
-        import json
+        text = str(getattr(text_blocks[0], "text", ""))
+        if not text.strip():
+            raise ExtractionError(
+                PROVIDER_RESPONSE_INCOMPLETE, "Provider returned an empty text block"
+            )
 
         try:
-            payload = json.loads(text)
-        except (ValueError, TypeError) as err:
+            # The wire schema constrains shape on the provider side; this
+            # enforces the full application contract -- lengths, bounds, enum
+            # membership, span ordering, candidate count -- which is the last
+            # word regardless of what the provider accepted.
+            return ExtractionResponse.model_validate_json(text)
+        except ValidationError as err:
+            # A local contract failure, not a transport or provider fault. It
+            # is never retryable: the same response fails identically.
+            logger.error(
+                "extraction.response_contract_failed: errors=%s",
+                _validation_error_summary(err),
+            )
+            raise ExtractionError(
+                PROVIDER_RESPONSE_INVALID,
+                "Provider response failed contract validation",
+            ) from err
+        except ValueError as err:
+            # Malformed JSON: model_validate_json raises this before Pydantic
+            # gets a chance to report field errors.
             raise ExtractionError(
                 PROVIDER_RESPONSE_INVALID, "Provider returned unparseable JSON"
             ) from err
-
-        try:
-            # The wire schema constrains shape; this enforces the full
-            # application contract (lengths, bounds, enum membership) that the
-            # wire schema deliberately does not carry.
-            return ExtractionResponse.model_validate(payload)
-        except Exception as err:
-            raise ExtractionError(
-                PROVIDER_RESPONSE_INVALID,
-                f"Provider response failed schema validation ({type(err).__name__})",
-            ) from err
-
-    @staticmethod
-    def _first_text_block(message: Any) -> str | None:
-        for block in getattr(message, "content", None) or []:
-            if getattr(block, "type", None) == "text":
-                return str(getattr(block, "text", ""))
-        return None
 
 
 def build_prompt_metadata() -> dict[str, str]:
