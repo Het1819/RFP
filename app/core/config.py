@@ -132,6 +132,10 @@ class Settings(BaseSettings):
     QUARANTINE_CHUNK_SIZE_BYTES: int = 1024 * 1024  # 1 MiB
     MAX_DISPLAY_FILENAME_LENGTH: int = 255
     DOCX_DETECTION_MAX_MEMBERS: int = 5000
+    PARSE_MAX_ATTEMPTS: int = 3
+    PARSE_RETRY_BACKOFF_BASE_SECONDS: float = 2.0
+    PARSE_RETRY_BACKOFF_MAX_SECONDS: float = 30.0
+    PARSER_SERVICE_URL: str = "http://parser:8000"
 
     # --- DOCX content-policy inspection (Phase A5c) ---
     # Bounds for the zip-bomb defense in app.services.docx_content_policy.

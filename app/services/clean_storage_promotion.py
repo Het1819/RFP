@@ -433,6 +433,10 @@ def promote_document(
         },
     )
 
+    from app.core.queue import enqueue_parse_job
+
+    enqueue_parse_job(doc.id)
+
     # 4. Quarantine source cleanup
     cleanup_success = False
     try:

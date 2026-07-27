@@ -124,11 +124,22 @@ async def promote_document_task(ctx: Any, document_id_str: str) -> None:
         db.close()
 
 
+async def parse_document_task(ctx: Any, document_id_str: str) -> None:
+    """A5e Pass 2 worker entry point: run document parsing orchestration
+    and atomic DocumentPage persistence for `document_id_str`.
+    """
+    document_id = uuid.UUID(document_id_str)
+    from app.services.document_parsing import run_parse_pipeline_async
+
+    await run_parse_pipeline_async(document_id)
+
+
 class WorkerSettings:
     functions: ClassVar[list[Any]] = [
         process_document_task,
         scan_document_task,
         promote_document_task,
+        parse_document_task,
     ]
     redis_settings = RedisSettings.from_dsn(settings.effective_redis_url)
     job_timeout = settings.JOB_TIMEOUT_SECONDS

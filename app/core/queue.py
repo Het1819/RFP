@@ -411,3 +411,138 @@ def enqueue_promotion_job(
             asyncio.run(_enqueue_promotion_to_redis(document_id, defer_by=defer_by))
         except Exception as exc:
             _handle_promotion_enqueue_failure(document_id, exc)
+
+
+# ---------------------------------------------------------------------------
+# A5e document parse enqueue path
+# ---------------------------------------------------------------------------
+
+
+async def _enqueue_parse_to_redis(
+    document_id: uuid.UUID, *, defer_by: float | None = None
+) -> None:
+    from arq import create_pool
+    from arq.connections import RedisSettings
+
+    redis = await create_pool(RedisSettings.from_dsn(settings.effective_redis_url))
+    await redis.enqueue_job("parse_document_task", str(document_id), _defer_by=defer_by)
+    await redis.close()
+
+
+def _handle_parse_enqueue_failure(document_id: uuid.UUID, exc: BaseException) -> None:
+    """Recovery path for a failed parse enqueue attempt."""
+    logger.error(
+        "enqueue_parse_job: failed to enqueue parse for document %s (%s)",
+        document_id,
+        type(exc).__name__,
+    )
+    try:
+        from app.core.database import SessionLocal
+        from app.models.audit import AuditEvent
+        from app.models.document import Document
+        from app.models.project import ProposalProject
+
+        db = SessionLocal()
+        try:
+            document = db.get(Document, document_id)
+            if document is None:
+                return
+            project = db.get(ProposalProject, document.project_id)
+            if project is None:
+                return
+
+            event = AuditEvent(
+                organization_id=project.organization_id,
+                user_id=document.created_by_id,
+                action="document_parse_enqueue_failed",
+                entity_type="document",
+                entity_id=document.id,
+                details={"reason_code": "PARSE_QUEUE_FAILED"},
+            )
+            db.add(event)
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.exception("enqueue_parse_job: audit logging failed for %s", document_id)
+
+
+def run_parse_sync(document_id: uuid.UUID) -> None:
+    """Synchronously run parse pipeline when queue is disabled."""
+    from app.services.document_parsing import run_parse_pipeline_async
+
+    try:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(run_parse_pipeline_async(document_id))
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+    except RuntimeError:
+        try:
+            asyncio.run(run_parse_pipeline_async(document_id))
+        except Exception:
+            logger.exception("run_parse_sync failed for document %s", document_id)
+
+
+def enqueue_parse_job(
+    document_id: uuid.UUID,
+    *,
+    sync_mode: bool = False,
+    defer_by: float | None = None,
+) -> None:
+    """Enqueue a document parsing job for `document_id`."""
+    if not settings.QUEUE_ENABLED:
+        from app.services.document_parsing import run_parse_pipeline_async
+
+        try:
+            loop = asyncio.get_running_loop()
+            task = loop.create_task(run_parse_pipeline_async(document_id))
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
+        except RuntimeError:
+            pass
+        return
+
+    if sync_mode:
+        run_parse_sync(document_id)
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(_enqueue_parse_to_redis(document_id, defer_by=defer_by))
+        _background_tasks.add(task)
+
+        def _on_done(t: asyncio.Task[Any]) -> None:
+            _background_tasks.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                _handle_parse_enqueue_failure(document_id, exc)
+
+        task.add_done_callback(_on_done)
+    except RuntimeError:
+        try:
+            asyncio.run(_enqueue_parse_to_redis(document_id, defer_by=defer_by))
+        except Exception as exc:
+            _handle_parse_enqueue_failure(document_id, exc)
+
+
+def enqueue_parse_retry(document_id: uuid.UUID, *, attempt: int) -> None:
+    """Schedule a bounded retry after a transient parse failure."""
+    import random
+
+    delay = min(
+        getattr(settings, "PARSE_RETRY_BACKOFF_BASE_SECONDS", 2.0)
+        * (2 ** (attempt - 1)),
+        getattr(settings, "PARSE_RETRY_BACKOFF_MAX_SECONDS", 30.0),
+    )
+    jittered = delay * (0.5 + random.random())
+    if not settings.QUEUE_ENABLED:
+        run_parse_sync(document_id)
+        return
+    try:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(_enqueue_parse_to_redis(document_id, defer_by=jittered))
+        _background_tasks.add(task)
+    except RuntimeError:
+        asyncio.run(_enqueue_parse_to_redis(document_id, defer_by=jittered))
