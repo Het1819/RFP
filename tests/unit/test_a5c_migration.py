@@ -213,7 +213,7 @@ class TestSqliteCheckConstraint:
         up1 = _run_alembic("upgrade", "head", database_url=url)
         assert up1.returncode == 0, up1.stderr
 
-        down = _run_alembic("downgrade", "-1", database_url=url)
+        down = _run_alembic("downgrade", "04ffd9fbcedb", database_url=url)
         assert down.returncode == 0, down.stderr
 
         conn = sqlite3.connect(str(sqlite_db_path))

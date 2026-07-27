@@ -80,8 +80,56 @@ async def scan_document_task(ctx: Any, document_id_str: str) -> None:
         db.close()
 
 
+async def promote_document_task(ctx: Any, document_id_str: str) -> None:
+    """A5d Pass 2 worker entry point: run crash-safe clean-storage promotion
+    for `document_id_str`. Independent of the legacy ProcessingJob table.
+    """
+    from app.core.database import SessionLocal as _SessionLocal
+    from app.models.document import Document
+    from app.models.project import ProposalProject
+    from app.services.clean_storage_promotion import (
+        PromotionError,
+        promote_document,
+    )
+
+    document_id = uuid.UUID(document_id_str)
+    db = _SessionLocal()
+    try:
+        doc = (
+            db.query(Document)
+            .filter(Document.id == document_id)
+            .with_for_update()
+            .first()
+        )
+        if not doc:
+            return
+
+        project = (
+            db.query(ProposalProject)
+            .filter(ProposalProject.id == doc.project_id)
+            .first()
+        )
+        if not project:
+            return
+
+        org_id = project.organization_id
+        user_id = doc.created_by_id
+
+        await asyncio.to_thread(
+            promote_document, db, document_id, org_id=org_id, user_id=user_id
+        )
+    except PromotionError:
+        pass
+    finally:
+        db.close()
+
+
 class WorkerSettings:
-    functions: ClassVar[list[Any]] = [process_document_task, scan_document_task]
+    functions: ClassVar[list[Any]] = [
+        process_document_task,
+        scan_document_task,
+        promote_document_task,
+    ]
     redis_settings = RedisSettings.from_dsn(settings.effective_redis_url)
     job_timeout = settings.JOB_TIMEOUT_SECONDS
     max_jobs = 4

@@ -263,3 +263,151 @@ def enqueue_scan_retry(document_id: uuid.UUID, *, attempt: int) -> None:
         task.add_done_callback(_on_retry_enqueue_done)
     except RuntimeError:
         asyncio.run(_enqueue_scan_to_redis(document_id, defer_by=jittered))
+
+
+# ---------------------------------------------------------------------------
+# A5d clean storage promotion enqueue path
+# ---------------------------------------------------------------------------
+
+
+async def _enqueue_promotion_to_redis(
+    document_id: uuid.UUID, *, defer_by: float | None = None
+) -> None:
+    from arq import create_pool
+    from arq.connections import RedisSettings
+
+    redis = await create_pool(RedisSettings.from_dsn(settings.effective_redis_url))
+    await redis.enqueue_job(
+        "promote_document_task", str(document_id), _defer_by=defer_by
+    )
+    await redis.close()
+
+
+_PROMOTION_ENQUEUE_FAILED_REASON = "PROMOTION_QUEUE_FAILED"
+
+
+def _handle_promotion_enqueue_failure(
+    document_id: uuid.UUID, exc: BaseException
+) -> None:
+    """Recovery path for a failed promotion enqueue attempt."""
+    logger.error(
+        "enqueue_promotion_job: failed to enqueue promotion for document %s (%s)",
+        document_id,
+        type(exc).__name__,
+    )
+    try:
+        from app.core.database import SessionLocal
+        from app.models.document import Document
+        from app.models.project import ProposalProject
+        from app.services.ingestion_state import IngestionStatus, transition
+
+        db = SessionLocal()
+        try:
+            document = db.get(Document, document_id)
+            if document is None or document.ingestion_status not in (
+                IngestionStatus.CLEAN_PENDING_PROMOTION,
+                IngestionStatus.PROMOTING,
+            ):
+                return
+            project = db.get(ProposalProject, document.project_id)
+            if project is None:
+                return
+
+            if document.ingestion_status == IngestionStatus.CLEAN_PENDING_PROMOTION:
+                transition(
+                    db,
+                    document,
+                    IngestionStatus.PROMOTING,
+                    org_id=project.organization_id,
+                    user_id=document.created_by_id,
+                    reason_code=_PROMOTION_ENQUEUE_FAILED_REASON,
+                )
+
+            transition(
+                db,
+                document,
+                IngestionStatus.PROMOTION_FAILED,
+                org_id=project.organization_id,
+                user_id=document.created_by_id,
+                reason_code=_PROMOTION_ENQUEUE_FAILED_REASON,
+                safe_summary=(
+                    "Clean storage promotion failed to queue. "
+                    "An operator will review the document."
+                ),
+            )
+        finally:
+            db.close()
+    except Exception:
+        logger.exception(
+            "enqueue_promotion_job: recovery path failed for document %s",
+            document_id,
+        )
+
+
+def _on_promotion_enqueue_task_done(
+    document_id: uuid.UUID, task: asyncio.Task[Any]
+) -> None:
+    _background_tasks.discard(task)
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _handle_promotion_enqueue_failure(document_id, exc)
+
+
+def run_promotion_sync(document_id: uuid.UUID) -> None:
+    """Synchronously run promotion for `document_id` when queue is disabled."""
+    from app.core.database import SessionLocal
+    from app.models.document import Document
+    from app.models.project import ProposalProject
+    from app.services.clean_storage_promotion import (
+        PromotionError,
+        promote_document,
+    )
+
+    db = SessionLocal()
+    try:
+        doc = db.get(Document, document_id)
+        if not doc:
+            return
+        project = db.get(ProposalProject, doc.project_id)
+        if not project:
+            return
+        try:
+            promote_document(
+                db,
+                document_id,
+                org_id=project.organization_id,
+                user_id=doc.created_by_id,
+            )
+        except PromotionError:
+            pass
+    finally:
+        db.close()
+
+
+def enqueue_promotion_job(
+    document_id: uuid.UUID,
+    *,
+    sync_mode: bool = False,
+    defer_by: float | None = None,
+) -> None:
+    """Enqueue a clean-storage promotion job for `document_id`."""
+    if not settings.QUEUE_ENABLED or sync_mode:
+        run_promotion_sync(document_id)
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(
+            _enqueue_promotion_to_redis(document_id, defer_by=defer_by)
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(
+            lambda t: _on_promotion_enqueue_task_done(document_id, t)
+        )
+    except RuntimeError:
+        try:
+            asyncio.run(_enqueue_promotion_to_redis(document_id, defer_by=defer_by))
+        except Exception as exc:
+            _handle_promotion_enqueue_failure(document_id, exc)

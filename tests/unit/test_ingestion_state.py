@@ -193,18 +193,17 @@ class TestA5cScanAndContentPolicyStates:
             )
         assert doc.ingestion_status == IngestionStatus.SCAN_FAILED  # unchanged
 
-    def test_clean_pending_promotion_has_no_outbound_transitions(self) -> None:
-        assert (
-            ALLOWED_TRANSITIONS[IngestionStatus.CLEAN_PENDING_PROMOTION] == frozenset()
-        )
+    def test_clean_pending_promotion_outbound_transitions(self) -> None:
+        assert ALLOWED_TRANSITIONS[
+            IngestionStatus.CLEAN_PENDING_PROMOTION
+        ] == frozenset({IngestionStatus.PROMOTING})
 
-    def test_clean_pending_promotion_to_clean_is_illegal(self, db) -> None:
-        """Reserved for A5d - not reachable in this phase."""
+    def test_clean_pending_promotion_to_promoting_is_allowed(self, db) -> None:
         org_id, user_id = get_default_org_and_user(db)
         doc = _make_document(user_id)
         doc.ingestion_status = IngestionStatus.CLEAN_PENDING_PROMOTION
-        with pytest.raises(IngestionStateError):
-            transition(db, doc, IngestionStatus.CLEAN, org_id=org_id, user_id=user_id)
+        transition(db, doc, IngestionStatus.PROMOTING, org_id=org_id, user_id=user_id)
+        assert doc.ingestion_status == IngestionStatus.PROMOTING
 
     def test_scan_retry_pending_no_longer_a_valid_status(self) -> None:
         assert "SCAN_RETRY_PENDING" not in IngestionStatus.ALL

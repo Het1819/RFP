@@ -340,7 +340,11 @@ def promote_document(
     # 2. Perform staged copy & verification
     try:
         try:
-            storage_id = doc.file_path.removesuffix(".upload") if doc.file_path else ""
+            storage_id = (
+                Path(doc.file_path).name.removesuffix(".upload")
+                if doc.file_path
+                else ""
+            )
             quarantine_src_path = resolve_quarantine_path(storage_id)
         except Exception as err:
             raise PromotionError(
