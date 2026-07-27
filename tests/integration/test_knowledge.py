@@ -13,12 +13,23 @@ from app.services.ingestion_state import IngestionStatus
 from tests.integration.test_projects import create_test_pdf
 
 
-def test_knowledge_upload_route_reaches_scanning_and_forces_pending(client, db):
+def test_knowledge_upload_route_reaches_scanning_and_forces_pending(
+    client, db, monkeypatch
+):
     """A5b: the knowledge upload route routes through quarantine-first
     ingestion and stops at SCANNING/REJECTED_TYPE. It must never trust a
     client-submitted approval_status - every newly uploaded knowledge
     document is forced to PENDING regardless of what the form claims, and
     no legacy document_processing job or DocumentPage is created here."""
+    # A5c Task 6: reaching SCANNING now calls enqueue_scan_job(), which
+    # with QUEUE_ENABLED=false (test default) would run a real scan
+    # attempt synchronously in-process (including a real ClamAV socket
+    # connection). Stub it so this test keeps asserting the A5b route
+    # behavior in isolation from the scanner.
+    import app.core.queue as queue_mod
+
+    monkeypatch.setattr(queue_mod, "enqueue_scan_job", lambda document_id: None)
+
     org_id, user_id = get_default_org_and_user(db)
 
     project = ProposalProject(

@@ -63,7 +63,16 @@ def test_project_creation_and_listing(client, db):
     assert "Acme Corp" in list_response.text
 
 
-def test_project_detail_and_rfp_upload_flow(client, db, tmp_path):
+def test_project_detail_and_rfp_upload_flow(client, db, tmp_path, monkeypatch):
+    # A5c Task 6: reaching SCANNING now calls enqueue_scan_job(), which
+    # with QUEUE_ENABLED=false (test default) would run a real scan
+    # attempt synchronously in-process (including a real ClamAV socket
+    # connection). Stub it so this test keeps asserting the A5b route/
+    # workflow behavior in isolation from the scanner.
+    import app.core.queue as queue_mod
+
+    monkeypatch.setattr(queue_mod, "enqueue_scan_job", lambda document_id: None)
+
     org_id, user_id = get_default_org_and_user(db)
 
     # 1. Create a project directly in DB

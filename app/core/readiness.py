@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.config import settings
+from app.services import clamav_client
 
 
 @dataclass(frozen=True)
@@ -52,3 +53,18 @@ def check_quarantine_storage() -> ReadinessCheckResult:
         return ReadinessCheckResult(False, "quarantine storage unavailable")
 
     return ReadinessCheckResult(True, "quarantine storage ready")
+
+
+def check_clamav_connectivity() -> ReadinessCheckResult:
+    """Confirm the configured `clamd` daemon is reachable via a PING/PONG
+    handshake, bounded by `CLAMAV_CONNECT_TIMEOUT_SECONDS`. Never scans a
+    file -- delegates entirely to `clamav_client.check_connectivity()`
+    (Task 2's protocol client), which owns the socket lifecycle. The
+    detail message never includes the configured host/port or any real
+    error detail, matching `check_quarantine_storage`'s no-internal-detail
+    convention, so a failure never leaks deployment details into logs or
+    API responses.
+    """
+    if clamav_client.check_connectivity():
+        return ReadinessCheckResult(True, "scanner ready")
+    return ReadinessCheckResult(False, "scanner unavailable")

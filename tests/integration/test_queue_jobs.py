@@ -32,6 +32,15 @@ def test_upload_never_creates_legacy_job_even_with_queue_enabled(
 
     monkeypatch.setattr("app.core.queue.enqueue_to_redis", mock_enqueue)
 
+    # A5c Task 6: reaching SCANNING now also calls enqueue_scan_job(),
+    # which with QUEUE_ENABLED=True would try to enqueue to a real Redis
+    # instance via arq. Mock the same way, so this test keeps asserting
+    # legacy-ProcessingJob behavior in isolation from the scanner.
+    async def mock_enqueue_scan(document_id, *, defer_by=None):
+        pass
+
+    monkeypatch.setattr("app.core.queue._enqueue_scan_to_redis", mock_enqueue_scan)
+
     org_id, user_id = get_default_org_and_user(db)
     proj = ProposalProject(
         organization_id=org_id,

@@ -89,7 +89,7 @@ Do not perform automatic schema rollbacks if:
 
 ### Step 2.6: Preserve Uploaded Files and Audit Logs
 * **Uploaded Files:** Uploaded/source documents live under `LOCAL_STORAGE_PATH` (`/data/storage` in the production Compose config), backed by the `app_storage` named volume. Ensure you do not run `docker compose down -v` (which deletes volumes) -- recreating the `app` container alone (`docker compose up -d --force-recreate app`) does not touch the volume and documents survive.
-* **Quarantined Files:** New uploads land first in `QUARANTINE_STORAGE_PATH`, backed by its own named volume — do not confuse this with `LOCAL_STORAGE_PATH`. Every upload is written under an application-generated storage identifier (never the original filename) and is independently classified as a PDF/DOCX candidate; a mismatch is rejected before any parsing, retrieval, or LLM action occurs. A file that passes candidate-type detection is queued for a security-scan stage that does not exist yet in this build — an operator must never describe a quarantined or queued file as "scanned," "verified safe," or "malware-free."
+* **Quarantined Files:** New uploads land first in `QUARANTINE_STORAGE_PATH`, backed by its own named volume — do not confuse this with `LOCAL_STORAGE_PATH`. Every upload is written under an application-generated storage identifier (never the original filename) and is independently classified as a PDF/DOCX candidate; a mismatch is rejected before any parsing, retrieval, or LLM action occurs. A file that passes candidate-type detection is queued for and run through the malware-scan/content-policy stage (see "Malware Scan Operations" below). A document that reaches `CLEAN_PENDING_PROMOTION` has passed that stage — it is still **not** safe to open, download, parse, or send to the LLM; promotion to actually-usable `CLEAN` storage is a later phase (A5d). An operator must never describe a `QUARANTINED`, `VALIDATING`, `SCANNING`, `SCAN_FAILED`, or `CLEAN_PENDING_PROMOTION` document as "scanned and safe," "verified clean," or "malware-free."
 * **Quarantine Storage Growth:** In this phase, files written to `QUARANTINE_STORAGE_PATH` — including rejected-type and quarantined uploads — are never automatically deleted; unbounded retention is by design until a later phase implements a retention/cleanup policy. Operators should monitor the `quarantine_storage` volume's disk usage as part of routine operations and escalate before it approaches capacity, since no automatic cleanup mechanism exists to fall back on.
 * **Audit Logs:** Ensure the log files under container stdout or host paths are preserved. Do not clear host log locations during container recreation.
 
@@ -242,7 +242,132 @@ Nginx running with a config that failed `nginx -t`.
 
 ---
 
-## 5. Pilot Support & Triage Escalation
+## 5. Malware Scan Operations (Phase A5c)
+
+Every uploaded document now passes through ClamAV malware scanning and
+PDF/DOCX content-policy inspection before it can ever be parsed. This
+section covers day-to-day operator response for that stage. See
+`DEPLOYMENT.md` section "9b. Malware Scanning & Content-Policy Inspection"
+for the full state list, check lists, and resource-limit reference.
+
+### 5.1 Documents stuck in `SCAN_FAILED`
+`SCAN_FAILED` is expected transiently — a document is automatically
+re-armed to `SCANNING` for another attempt as long as
+`scan_attempt_count < SCAN_MAX_ATTEMPTS` (default 3). A document is only
+a real operator concern once it has exhausted its attempts.
+
+1. **Confirm whether it is exhausted.** Query the document's
+   `scan_attempt_count` and look for the corresponding `AuditEvent` rows
+   (action `document_ingestion_transition`, `to: SCAN_FAILED`). The final
+   exhausting attempt's `details` JSON includes `scan_exhausted: true`,
+   and the worker log carries a matching
+   `run_scan: document <id> exhausted scan attempts (N/N), reason=...`
+   warning line. If `scan_attempt_count < SCAN_MAX_ATTEMPTS`, no action is
+   needed — a retry is already scheduled (or, in `QUEUE_ENABLED=False`
+   dev/test mode, already ran inline).
+2. **Read the reason code** on the audit event / `document.scan_status`
+   to decide what's actually wrong:
+   - `SCANNER_UNAVAILABLE` / `SCANNER_TIMEOUT` / `SCANNER_PROTOCOL_ERROR`
+     — `clamd` connectivity problem. Check `clamd` health first (5.2).
+   - `SIGNATURE_DATABASE_STALE` — `clamd`'s reported signature age exceeds
+     `CLAMAV_MAX_SIGNATURE_AGE_HOURS` (default 48h). Check freshclam is
+     actually updating inside the `clamd` container:
+     ```bash
+     docker compose -f docker-compose.prod.yml logs clamd | grep -i freshclam
+     ```
+   - `SCAN_SIZE_LIMIT_EXCEEDED` — the file exceeded
+     `CLAMAV_STREAM_MAX_BYTES`. This should be rare in practice, since it
+     is bounded below `MAX_UPLOAD_SIZE` at startup; if seen, it indicates
+     the upload limits need reconciling, not a per-document fix.
+   - `PDF_INSPECTION_FAILED` — the isolated PDF inspector subprocess
+     could not reach a verdict (timeout, resource-limit kill, or an
+     unparseable/malformed structure `pypdf` itself rejected). This is a
+     genuine "could not determine," distinct from a confirmed policy
+     rejection.
+   - `QUARANTINE_INTEGRITY_MISMATCH` — the file's on-disk digest no longer
+     matches what was recorded at quarantine time (missing file, disk
+     issue, or tampering). Treat as a priority incident, not a routine
+     retry candidate — investigate the quarantine volume before manually
+     retrying.
+   - `SCAN_SYSTEM_ERROR` — an unexpected internal exception escaped one of
+     the scan/inspection modules (which are each documented to catch
+     everything internally). Check worker logs around the matching
+     timestamp for the exception type and escalate as a code defect.
+3. **Never manually flip an exhausted `SCAN_FAILED` document to
+   `CLEAN`/`CLEAN_PENDING_PROMOTION` to "unblock" a user.** Every
+   transition must go through `ingestion_state.transition()`'s validated
+   state machine and produce a real scan/inspection result — there is no
+   supported operator override that marks a document safe without it
+   actually passing scanning.
+4. If the underlying cause is fixed (e.g. `clamd` restored, signatures
+   refreshed) and the document is still sitting exhausted in
+   `SCAN_FAILED`, re-queuing requires a fresh scan attempt through the
+   normal application path (re-upload, or a supported retry action if one
+   is exposed in the UI/job-retry route) — not a direct database edit.
+
+**Known limitation — enqueue-failure recovery is best-effort.**
+`app.core.queue.enqueue_scan_job`'s `QUEUE_ENABLED=True` fire-and-forget
+Redis enqueue now logs any failure and attempts to transition the
+document straight to `SCAN_FAILED` / `SCAN_ENQUEUE_FAILED` (re-entering
+the normal bounded-retry path) instead of silently stranding it. That
+recovery path opens its own short-lived DB session and is itself
+best-effort: if the database is *also* unavailable at that exact moment,
+the document can still be left in `SCANNING` with `scan_attempt_count`
+still `0` and no scan ever attempted — there is no reaper for stale
+`SCANNING` rows in this phase. If a document appears stuck this way, look
+for the corresponding `enqueue_scan_job: failed to enqueue scan for
+document <id>` (and, if the recovery path also failed,
+`enqueue_scan_job: recovery path itself failed for document <id>`)
+warning/error lines in `app` logs around the upload time, and query for
+documents with `ingestion_status = 'SCANNING'`,
+`quarantined_at` older than a few minutes, and `scan_attempt_count = 0` —
+those are enqueue-failure candidates, not documents actively being
+scanned. The equivalent retry-side path
+(`app.core.queue.enqueue_scan_retry`'s fire-and-forget enqueue) only logs
+on failure rather than attempting a transition, since a document reaching
+that path already has an existing `SCAN_FAILED` audit trail from the
+attempt that led there.
+
+### 5.2 Checking `clamd` health
+```bash
+# Container-level health (Docker's own healthcheck, using clamd's bundled script)
+docker compose -f docker-compose.prod.yml ps clamd
+
+# Direct PING/PONG handshake and version/signature info from inside the worker
+docker compose -f docker-compose.prod.yml exec worker python -c "
+from app.services import clamav_client
+print('connectivity:', clamav_client.check_connectivity())
+print('version info:', clamav_client.get_version_info())
+"
+
+# clamd container logs (startup, freshclam activity, errors)
+docker compose -f docker-compose.prod.yml logs clamd
+```
+`clamd` has no published host port and receives no secrets — it is only
+reachable from `worker` over the private `backend` network. There is
+nothing to check from the host directly; always go through `worker` or
+`docker compose exec clamd`.
+
+### 5.3 What `/readyz` reports for scanning
+`/readyz` (reachable only from inside the private network, never through
+the public Nginx edge — see DEPLOYMENT.md "Internal endpoints") includes a
+`clamd` connectivity check (`app.core.readiness.check_clamav_connectivity`)
+alongside its existing PostgreSQL/Redis/quarantine-storage checks:
+- It performs a bounded PING/PONG handshake only — it never scans a file
+  and never reports signature age (that is enforced per-scan-attempt
+  inside `run_scan`, not at the readiness layer).
+- A `503` from `/readyz` with detail `"Scanner not ready"` means `clamd`
+  is unreachable or timed out the PING within
+  `CLAMAV_CONNECT_TIMEOUT_SECONDS` — check clamd health (5.2) before
+  investigating anything else.
+- The detail message deliberately omits host/port and any internal error
+  detail, matching every other readiness check's no-internal-detail
+  convention — do not expect more diagnostic detail from `/readyz` itself;
+  use 5.2's direct checks for that.
+
+---
+
+## 6. Pilot Support & Triage Escalation
 For managing participant bug reports, usability blockers, or AI quality issues reported via the `/feedback` workspace route:
 - Refer to [PILOT_TRIAGE_WORKFLOW.md](file:///D:/RFA/Project/rfp-architect-mvp/PILOT_TRIAGE_WORKFLOW.md) for detailed severity definitions (Blocker, High, Medium, Low), SLA targets, and assignment owners.
 - If a security incident is identified (e.g. cross-tenant leakage or auth bypass), immediately execute Step 2 (Rollback Drill) to secure and isolate the stack.

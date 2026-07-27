@@ -3,8 +3,27 @@ SCANNING/REJECTED_TYPE, never enqueue legacy processing."""
 
 import io
 
+import pytest
+
 from app.models.document import Document
 from app.services.ingestion_state import IngestionStatus
+
+
+@pytest.fixture(autouse=True)
+def _stub_enqueue_scan_job(monkeypatch):
+    """These are A5b route-level tests: they assert the upload route
+    reaches SCANNING/REJECTED_TYPE and never creates a legacy
+    ProcessingJob. As of A5c Task 6, reaching SCANNING also calls
+    enqueue_scan_job(), which -- with QUEUE_ENABLED=false, the test-suite
+    default -- would otherwise run a real scan attempt synchronously
+    in-process (including a real ClamAV socket connection) inside the
+    request and mutate the document past SCANNING. Stub it to a no-op so
+    these tests keep asserting the A5b route behavior in isolation from
+    the scanner (covered separately by test_malware_scan.py and
+    test_a5c_worker_wiring.py)."""
+    import app.core.queue as queue_mod
+
+    monkeypatch.setattr(queue_mod, "enqueue_scan_job", lambda document_id: None)
 
 
 def _pdf_bytes() -> bytes:
