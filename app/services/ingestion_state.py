@@ -6,9 +6,12 @@ enforcement point for the security invariants in AGENTS.md / A5 spec
 section 3: quarantined files cannot be downloaded, approved, retrieved,
 sent to the LLM, or parsed by the legacy in-process parser; only files
 that pass structural validation, detected-type validation, malware
-scanning, and content-policy inspection may reach CLEAN; only CLEAN
-files may be parsed; only successfully parsed documents may reach
-COMPLETED and enter requirement extraction.
+scanning, and content-policy inspection may reach
+CLEAN_PENDING_PROMOTION; only CLEAN files may be parsed; only
+successfully parsed documents may reach COMPLETED and enter requirement
+extraction. Promotion from CLEAN_PENDING_PROMOTION to CLEAN is out of
+scope for this phase (A5d) - CLEAN_PENDING_PROMOTION has no outbound
+transitions here.
 
 NOTE: transition() does not itself provide concurrency safety - it is a
 plain read-modify-write against the ORM object passed in, with no row
@@ -35,10 +38,13 @@ class IngestionStatus:
     QUARANTINED = "QUARANTINED"
     VALIDATING = "VALIDATING"
     SCANNING = "SCANNING"
-    SCAN_RETRY_PENDING = "SCAN_RETRY_PENDING"
     REJECTED_TYPE = "REJECTED_TYPE"
     REJECTED_MALWARE = "REJECTED_MALWARE"
     REJECTED_CONTENT_POLICY = "REJECTED_CONTENT_POLICY"
+    SCAN_FAILED = "SCAN_FAILED"
+    CLEAN_PENDING_PROMOTION = "CLEAN_PENDING_PROMOTION"
+    PROMOTING = "PROMOTING"
+    PROMOTION_FAILED = "PROMOTION_FAILED"
     CLEAN = "CLEAN"
     PARSING = "PARSING"
     PARSE_FAILED = "PARSE_FAILED"
@@ -50,10 +56,13 @@ class IngestionStatus:
             QUARANTINED,
             VALIDATING,
             SCANNING,
-            SCAN_RETRY_PENDING,
             REJECTED_TYPE,
             REJECTED_MALWARE,
             REJECTED_CONTENT_POLICY,
+            SCAN_FAILED,
+            CLEAN_PENDING_PROMOTION,
+            PROMOTING,
+            PROMOTION_FAILED,
             CLEAN,
             PARSING,
             PARSE_FAILED,
@@ -74,16 +83,21 @@ ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     ),
     IngestionStatus.SCANNING: frozenset(
         {
-            IngestionStatus.CLEAN,
+            IngestionStatus.CLEAN_PENDING_PROMOTION,
             IngestionStatus.REJECTED_MALWARE,
             IngestionStatus.REJECTED_CONTENT_POLICY,
-            IngestionStatus.SCAN_RETRY_PENDING,
+            IngestionStatus.SCAN_FAILED,
         }
     ),
-    IngestionStatus.SCAN_RETRY_PENDING: frozenset({IngestionStatus.SCANNING}),
+    IngestionStatus.SCAN_FAILED: frozenset({IngestionStatus.SCANNING}),
     IngestionStatus.REJECTED_TYPE: frozenset(),
     IngestionStatus.REJECTED_MALWARE: frozenset(),
     IngestionStatus.REJECTED_CONTENT_POLICY: frozenset(),
+    IngestionStatus.CLEAN_PENDING_PROMOTION: frozenset({IngestionStatus.PROMOTING}),
+    IngestionStatus.PROMOTING: frozenset(
+        {IngestionStatus.CLEAN, IngestionStatus.PROMOTION_FAILED}
+    ),
+    IngestionStatus.PROMOTION_FAILED: frozenset({IngestionStatus.PROMOTING}),
     IngestionStatus.CLEAN: frozenset({IngestionStatus.PARSING}),
     IngestionStatus.PARSING: frozenset(
         {IngestionStatus.COMPLETED, IngestionStatus.PARSE_FAILED}
@@ -107,6 +121,7 @@ def transition(
     user_id: uuid.UUID | None,
     reason_code: str | None = None,
     safe_summary: str | None = None,
+    audit_detail: dict[str, Any] | None = None,
 ) -> None:
     """Validate and apply an ingestion-status transition on `document`.
 
@@ -116,6 +131,17 @@ def transition(
     (idempotent) and do not write a duplicate audit event. Raises
     IngestionStateError, leaving `document` unmutated, if `new_status` is
     unknown or not reachable from the document's current status.
+
+    `audit_detail` is merged into the AuditEvent's `details` JSON only -
+    it is never written to `document.rejection_reason_code` or
+    `document.operator_failure_summary`, both of which templates/UI may
+    eventually surface to end users. This is the sanctioned place for
+    operator-only forensic detail (e.g. a malware signature name, or
+    scan-attempt-exhaustion bookkeeping) that must never leak into a
+    user-facing rejection message. Keys in `audit_detail` that collide
+    with the base `from`/`to`/`reason_code` keys are silently overridden
+    by the base keys, not the other way around, so callers cannot
+    accidentally corrupt the transition-identity fields.
     """
     if new_status not in IngestionStatus.ALL:
         raise IngestionStateError(f"Unknown ingestion status: {new_status!r}")
@@ -136,7 +162,11 @@ def transition(
     if safe_summary is not None:
         document.operator_failure_summary = safe_summary
 
-    details: dict[str, Any] = {"from": current, "to": new_status}
+    details: dict[str, Any] = {}
+    if audit_detail is not None:
+        details.update(audit_detail)
+    details["from"] = current
+    details["to"] = new_status
     if reason_code is not None:
         details["reason_code"] = reason_code
 

@@ -173,6 +173,7 @@ async def run_evaluation(offline_mode: bool) -> dict:
             total_evidence_validation_attempts += 1
 
             from app.models.document import Document, DocumentPage
+            from app.services.ingestion_state import IngestionStatus
 
             doc_id = uuid.uuid4()
             project_id = uuid.uuid4()
@@ -185,6 +186,7 @@ async def run_evaluation(offline_mode: bool) -> dict:
                 approval_status="APPROVED",
                 doc_role="knowledge_base",
                 content=ic["document_text"],
+                ingestion_status=IngestionStatus.COMPLETED,
             )
 
             mock_page = DocumentPage(

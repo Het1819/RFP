@@ -1,4 +1,3 @@
-import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -12,7 +11,16 @@ from app.core.config import settings
 from app.models.audit import AuditEvent
 from app.models.document import Document, DocumentPage
 from app.models.project import ProposalProject
-from app.services.extractor import extract_pages, validate_uploaded_file
+from app.services.extractor import extract_pages
+from app.services.ingestion_state import IngestionStateError, IngestionStatus
+
+_TERMINAL_REJECTED_STATUSES = frozenset(
+    {
+        IngestionStatus.REJECTED_TYPE,
+        IngestionStatus.REJECTED_MALWARE,
+        IngestionStatus.REJECTED_CONTENT_POLICY,
+    }
+)
 
 
 def log_audit_event(
@@ -63,13 +71,29 @@ def get_project(
     ).first()
 
 
+def _first_active_rfp(candidates: list[Document]) -> Document | None:
+    """Return the first document in `candidates` that is not in a terminal
+    rejection state, or None if all candidates are terminally rejected (or
+    the list is empty). Shared by get_project_document (which needs the
+    active document itself) and upload_rfp_document (which only needs to
+    know whether one exists)."""
+    for doc in candidates:
+        if doc.ingestion_status not in _TERMINAL_REJECTED_STATUSES:
+            return doc
+    return None
+
+
 def get_project_document(db: Session, project_id: uuid.UUID) -> Document | None:
-    """Retrieve the RFP document for a project if it exists."""
-    return db.scalars(
-        select(Document).where(
-            Document.project_id == project_id, Document.doc_role == "rfp"
-        )
-    ).first()
+    """Retrieve the current active RFP document for a project, if one
+    exists. "Active" means not in a terminal rejection state - a project
+    may have multiple historical rejected-type RFP rows, but at most one
+    active (non-terminally-rejected) row at a time."""
+    candidates = db.scalars(
+        select(Document)
+        .where(Document.project_id == project_id, Document.doc_role == "rfp")
+        .order_by(Document.created_at.desc())
+    ).all()
+    return _first_active_rfp(list(candidates))
 
 
 def create_project(
@@ -113,71 +137,50 @@ def upload_rfp_document(
     file: UploadFile,
     background_tasks: BackgroundTasks | None = None,
 ) -> Document:
-    """Validate and upload an RFP document for a project, then queue text extraction."""
-    # 1. Fetch project
+    """Stream an RFP upload into quarantine and run independent
+    candidate-type detection. Stops at ingestion_status SCANNING or
+    REJECTED_TYPE - no malware scan, parsing, or requirement extraction
+    happens here (A5c+)."""
     proj = get_project(db, project_id, org_id)
     if not proj:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    # 2. Check if project already has an RFP
-    existing_rfp = get_project_document(db, project_id)
-    if existing_rfp:
-        raise HTTPException(
-            status_code=400, detail="Project already has an RFP document"
+    # Lock the parent ProposalProject row (not the Document rows) to
+    # serialize concurrent uploads for this project. Locking Document rows
+    # via SELECT ... FOR UPDATE is a no-op on a project's FIRST-ever RFP
+    # upload, because there are zero existing rows to lock - two concurrent
+    # first-uploads would both observe "no active RFP" and both succeed.
+    # Locking the always-present parent project row instead means both
+    # concurrent requests serialize on it regardless of whether any
+    # Document rows exist yet. SQLite (test/dev) does not support FOR
+    # UPDATE row locks; guard accordingly.
+    if db.bind is not None and db.bind.dialect.name == "postgresql":
+        db.execute(
+            select(ProposalProject)
+            .where(ProposalProject.id == project_id)
+            .with_for_update()
         )
 
-    # 3. Validate file
-    validate_uploaded_file(file, settings.MAX_UPLOAD_SIZE)
+    existing = db.scalars(
+        select(Document).where(
+            Document.project_id == project_id, Document.doc_role == "rfp"
+        )
+    ).all()
+    if _first_active_rfp(list(existing)) is not None:
+        raise HTTPException(
+            status_code=400, detail="Project already has an active RFP document"
+        )
 
-    # 4. Save file locally
-    storage_dir = Path(settings.LOCAL_STORAGE_PATH) / "documents"
-    storage_dir.mkdir(parents=True, exist_ok=True)
+    from app.services.document_ingestion import ingest_uploaded_document
 
-    doc_id = uuid.uuid4()
-    ext = Path(file.filename or "").suffix.lower()
-    file_path = storage_dir / f"{doc_id}{ext}"
-
-    with file_path.open("wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    # 5. Create Document record
-    doc = Document(
-        id=doc_id,
-        project_id=project_id,
-        name=file.filename or "RFP Document",
-        file_path=str(file_path),
-        file_type=file.content_type or "application/octet-stream",
-        doc_role="rfp",
-        processing_status="pending",  # Starts as pending
-        created_by_id=user_id,
-    )
-    db.add(doc)
-    db.commit()
-    db.refresh(doc)
-
-    log_audit_event(
+    return ingest_uploaded_document(
         db,
+        project=proj,
         org_id=org_id,
         user_id=user_id,
-        action="document_upload",
-        entity_type="Document",
-        entity_id=doc.id,
-        details={"name": doc.name, "role": doc.doc_role},
+        upload=file,
+        doc_role="rfp",
     )
-
-    # 6. Queue background extraction task via enqueue_job
-    from app.core.queue import enqueue_job
-
-    enqueue_job(
-        db=db,
-        org_id=org_id,
-        project_id=project_id,
-        document_id=doc.id,
-        job_type="document_processing",
-        user_id=user_id,
-    )
-
-    return doc
 
 
 def process_document_background(
@@ -297,6 +300,17 @@ async def process_job_pipeline_async(db: Session, job: Any) -> None:
         doc = db.scalar(select(Document).where(Document.id == job.document_id))
         if not doc:
             raise ValueError("Associated document record not found")
+
+        # Fail closed: the legacy in-process parser (PyMuPDF / python-docx)
+        # must never run against a document that has not passed quarantine
+        # validation and malware/content-policy scanning. In normal A5b
+        # operation no such document is ever enqueued (see Task 6/7), so
+        # this is a defense-in-depth backstop, not an expected path.
+        if doc.ingestion_status != IngestionStatus.CLEAN:
+            raise IngestionStateError(
+                "Document has not passed required security validation "
+                f"(ingestion_status={doc.ingestion_status!r}, expected CLEAN)"
+            )
 
         doc.processing_status = "processing"
         db.commit()

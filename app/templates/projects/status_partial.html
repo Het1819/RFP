@@ -17,6 +17,69 @@
             <button type="submit" class="btn btn-primary" style="align-self: flex-end; padding: 0.75rem 1.75rem;">Upload & Analyze</button>
         </form>
         
+    {% elif document.ingestion_status == "QUARANTINED" %}
+        <div style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: 2.5rem 1rem; gap: 1.25rem; background: var(--surface-tertiary); border: 1px solid var(--border-color); border-radius: 12px; width: 100%;">
+            <div style="font-size: 2rem;">📥</div>
+            <div>
+                <h4 style="font-size: 1.15rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-primary);">Upload received</h4>
+                <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">Preparing for validation.</p>
+            </div>
+        </div>
+
+    {% elif document.ingestion_status == "VALIDATING" %}
+        <div hx-get="/projects/{{ project.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML" style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: 2.5rem 1rem; gap: 1.25rem; background: var(--surface-tertiary); border: 1px solid var(--border-color); border-radius: 12px; width: 100%;">
+            <div class="spinner" style="width: 44px; height: 44px; border: 4px solid rgba(18, 105, 211, 0.15); border-left-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite;"></div>
+            <div>
+                <h4 style="font-size: 1.15rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-primary);">Validating document type</h4>
+                <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">Confirming this is a valid PDF or DOCX file.</p>
+            </div>
+        </div>
+
+    {% elif document.ingestion_status == "SCANNING" %}
+        <div hx-get="/projects/{{ project.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML" style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: 2.5rem 1rem; gap: 1.25rem; background: var(--surface-tertiary); border: 1px solid var(--border-color); border-radius: 12px; width: 100%;">
+            <div class="spinner" style="width: 44px; height: 44px; border: 4px solid rgba(18, 105, 211, 0.15); border-left-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite;"></div>
+            <div>
+                <h4 style="font-size: 1.15rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-primary);">Awaiting security scan</h4>
+                <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">This document has passed initial validation and is queued for a security scan step that is not yet available in this build.</p>
+            </div>
+        </div>
+
+    {% elif document.ingestion_status == "REJECTED_TYPE" %}
+        <div style="display: flex; flex-direction: column; gap: 1.25rem;">
+            <div style="display: flex; justify-content: space-between; align-items: center; background: var(--status-needs-evidence-bg); border: 1px solid rgba(180, 35, 24, 0.2); padding: 1.25rem; border-radius: 12px;">
+                <div style="display: flex; align-items: center; gap: 1rem;">
+                    <span style="font-size: 1.75rem;">❌</span>
+                    <div>
+                        <p style="font-weight: 600; color: var(--text-primary); font-size: 1.05rem; margin-bottom: 0.15rem;">Document rejected</p>
+                        <p style="font-size: 0.8rem; color: var(--text-secondary);">Please upload a valid PDF or DOCX file.</p>
+                    </div>
+                </div>
+                <span class="badge" style="background: var(--status-needs-evidence-bg); border-color: rgba(180, 35, 24, 0.3); color: var(--status-needs-evidence); font-size: 0.8rem;">REJECTED</span>
+            </div>
+
+            <hr style="border: 0; border-top: 1px solid var(--border-color); margin: 0.5rem 0;">
+            <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">Upload a different file:</p>
+
+            <form action="/projects/{{ project.id }}/upload" method="POST" enctype="multipart/form-data" style="display: flex; flex-direction: column; gap: 1.25rem;">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                <div class="file-drop-zone" style="border: 2px dashed var(--border-color); border-radius: 12px; padding: 2.5rem 1.5rem; text-align: center; cursor: pointer; transition: all 0.3s; position: relative; background: var(--canvas);">
+                    <input type="file" name="file" accept=".pdf,.docx" required style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer;">
+                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">📤</div>
+                    <p style="font-weight: 600; color: var(--text-primary); margin-bottom: 0.25rem;">Upload new file</p>
+                </div>
+                <button type="submit" class="btn btn-primary" style="align-self: flex-end; padding: 0.75rem 1.75rem;">Upload & Analyze</button>
+            </form>
+        </div>
+
+    {% elif document.ingestion_status == "LEGACY_UNVERIFIED" %}
+        <div style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: 2.5rem 1rem; gap: 1.25rem; background: var(--surface-tertiary); border: 1px solid var(--border-color); border-radius: 12px; width: 100%;">
+            <div style="font-size: 2rem;">🔒</div>
+            <div>
+                <h4 style="font-size: 1.15rem; font-weight: 600; margin-bottom: 0.5rem; color: var(--text-primary);">Security reprocessing required</h4>
+                <p style="font-size: 0.9rem; color: var(--text-secondary); line-height: 1.5;">This existing document requires security reprocessing before it can be used.</p>
+            </div>
+        </div>
+
     {% elif document.processing_status in ("pending", "processing") or (job and job.status in ("QUEUED", "RUNNING", "RETRYING")) %}
         <div hx-get="/projects/{{ project.id }}/status" hx-trigger="every 2s" hx-swap="outerHTML" style="display: flex; flex-direction: column; align-items: center; text-align: center; padding: 2.5rem 1rem; gap: 1.25rem; background: var(--surface-tertiary); border: 1px solid var(--border-color); border-radius: 12px; width: 100%;">
             <div class="spinner" style="width: 44px; height: 44px; border: 4px solid rgba(18, 105, 211, 0.15); border-left-color: var(--accent); border-radius: 50%; animation: spin 1s linear infinite;"></div>

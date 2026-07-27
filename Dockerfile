@@ -17,6 +17,7 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.24@sha256:99ea34acedc870ba4ad11a1f540a1c04
 WORKDIR /app
 COPY pyproject.toml uv.lock ./
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
+ENV UV_HTTP_TIMEOUT=120
 # --locked: fail the build if uv.lock and pyproject.toml disagree, instead
 # of silently re-resolving. --no-dev: never install the dev dependency
 # group into the runtime image. --no-install-project: only install
@@ -39,14 +40,14 @@ COPY --from=python-builder /opt/venv /opt/venv
 COPY --from=frontend-builder /app/app/static/dist /app/app/static/dist
 COPY . /app
 
-# Persistent-storage mount point: created here (not left for Docker to
+# Persistent-storage mount points: created here (not left for Docker to
 # auto-create as root on first volume mount) so the non-root runtime user
-# can actually write to it once docker-compose.prod.yml mounts a volume
-# at this path.
-RUN mkdir -p /data/storage
+# can actually write to them once docker-compose.prod.yml mounts a volume
+# at these paths.
+RUN mkdir -p /data/storage /data/quarantine
 
 # Ensure correct permissions
-RUN chown -R appuser:appgroup /app /data/storage
+RUN chown -R appuser:appgroup /app /data/storage /data/quarantine
 
 # Set path and env vars
 ENV PATH="/opt/venv/bin:$PATH"

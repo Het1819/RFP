@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RFP Architect — Review Candidate</title>
+    {#
+      As with the queue: no <img>, <iframe>, <object>, <embed>, or preview is
+      generated from candidate or evidence content. A URL inside the evidence
+      stays inert text and is never fetched by the browser. Jinja autoescaping
+      renders any markup in that text as visible characters.
+    #}
+    <meta name="referrer" content="no-referrer">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/dist/app.css">
+</head>
+<body>
+    <div class="glass-bg"></div>
+
+    <div class="app-shell">
+        <div class="main-content" style="margin: 0 auto; max-width: 60rem;">
+            <header class="top-bar">
+                <div class="top-bar-left">
+                    <a href="/compliance/requirement-candidates" class="back-link" style="text-decoration: none; font-size: 1.25rem; color: var(--text-muted);">&larr;</a>
+                    <div style="display: flex; flex-direction: column;">
+                        <span class="workspace-context">Candidate Review • {{ project_name }}</span>
+                        <span class="workspace-title">Requirement candidate</span>
+                    </div>
+                </div>
+            </header>
+
+            <main class="dashboard-container">
+                <!-- Immutable source evidence -->
+                <section style="background: var(--surface-primary); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: var(--space-lg); margin-bottom: var(--space-md);">
+                    <h2 style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin-bottom: var(--space-xs);">Source evidence (immutable)</h2>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: var(--space-sm);">
+                        {{ candidate.unit_kind }} • {{ candidate.source_locator }} •
+                        characters {{ candidate.span_start }}–{{ candidate.span_end }}
+                    </p>
+                    <blockquote style="margin: 0; font-size: 0.9rem; color: var(--text-primary); white-space: pre-wrap; border-left: 3px solid var(--accent); padding-left: var(--space-md);">{{ candidate.evidence_text }}</blockquote>
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: var(--space-sm);">
+                        Quoted verbatim from the uploaded document. It is displayed as plain
+                        text and is never followed, fetched, or executed.
+                    </p>
+                </section>
+
+                <!-- Proposed requirement -->
+                <section style="background: var(--surface-primary); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: var(--space-lg); margin-bottom: var(--space-md);">
+                    <h2 style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin-bottom: var(--space-xs);">Proposed requirement</h2>
+                    <p style="font-size: 1rem; font-weight: 600; color: var(--text-primary);">{{ candidate.normalized_requirement_text }}</p>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); margin-top: var(--space-sm);">
+                        {% if candidate.requirement_type %}Type: {{ candidate.requirement_type }}{% else %}Type: unclassified{% endif %}
+                        {% if candidate.confidence is not none %} • Model confidence: {{ '%.2f'|format(candidate.confidence) }}{% endif %}
+                        • Status: {{ candidate.candidate_status }}
+                    </p>
+                    {% if candidate.confidence is not none %}
+                    <p style="font-size: 0.75rem; color: var(--text-muted);">
+                        Confidence is the model's own estimate. It carries no authority and
+                        never affects whether this becomes a requirement.
+                    </p>
+                    {% endif %}
+                    <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: var(--space-xs);">
+                        schema {{ schema_version }}{% if prompt_version %} • prompt {{ prompt_version }}{% endif %}{% if provider %} • {{ provider }}{% endif %}{% if model %} • {{ model }}{% endif %}
+                    </p>
+                </section>
+
+                {% if candidate.reviewer_edited_text %}
+                <section style="background: var(--surface-primary); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: var(--space-lg); margin-bottom: var(--space-md);">
+                    <h2 style="font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-secondary); margin-bottom: var(--space-xs);">Reviewer-edited text</h2>
+                    <p style="font-size: 0.95rem; color: var(--text-primary);">{{ candidate.reviewer_edited_text }}</p>
+                </section>
+                {% endif %}
+
+                {% if is_open %}
+                <!-- Review actions. Each posts to the existing CSRF-protected route;
+                     the centralized service owns authorization and transitions. -->
+                <section style="background: var(--surface-primary); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: var(--space-lg);">
+                    <h2 style="font-size: 1rem; font-weight: 700; margin-bottom: var(--space-md);">Your decision</h2>
+
+                    <form method="POST" action="/compliance/requirement-candidates/{{ candidate.id }}/approve" style="margin-bottom: var(--space-lg);">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                        <label for="approve-comment" style="font-size: 0.85rem; color: var(--text-secondary);">Comment (optional)</label>
+                        <input id="approve-comment" class="form-input" type="text" name="reviewer_comment" maxlength="{{ max_comment_len }}" style="width: 100%; margin: 0.25rem 0 var(--space-sm);">
+                        <button type="submit" class="btn btn-primary" style="padding: 0.55rem 1.25rem;">Approve as written</button>
+                        <span style="font-size: 0.8rem; color: var(--text-muted); margin-left: var(--space-sm);">Creates one requirement in the compliance matrix.</span>
+                    </form>
+
+                    <form method="POST" action="/compliance/requirement-candidates/{{ candidate.id }}/edit" style="margin-bottom: var(--space-lg); border-top: 1px solid var(--border-color); padding-top: var(--space-md);">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                        <label for="edited-text" style="font-size: 0.85rem; color: var(--text-secondary);">Edit the requirement text, then approve</label>
+                        <textarea id="edited-text" class="form-input" name="edited_text" rows="4" required maxlength="{{ max_edit_len }}" style="width: 100%; margin: 0.25rem 0 var(--space-xs);">{{ candidate.normalized_requirement_text }}</textarea>
+                        <p style="font-size: 0.75rem; color: var(--text-muted); margin-bottom: var(--space-sm);">
+                            Your wording is stored alongside the original proposal, not over it.
+                            The evidence above is unchanged either way.
+                        </p>
+                        <label for="edit-comment" style="font-size: 0.85rem; color: var(--text-secondary);">Comment (optional)</label>
+                        <input id="edit-comment" class="form-input" type="text" name="reviewer_comment" maxlength="{{ max_comment_len }}" style="width: 100%; margin: 0.25rem 0 var(--space-sm);">
+                        <button type="submit" class="btn btn-primary" style="padding: 0.55rem 1.25rem;">Save edit and approve</button>
+                    </form>
+
+                    <form method="POST" action="/compliance/requirement-candidates/{{ candidate.id }}/reject" style="border-top: 1px solid var(--border-color); padding-top: var(--space-md);">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                        <label for="reject-comment" style="font-size: 0.85rem; color: var(--text-secondary);">Reason (optional)</label>
+                        <input id="reject-comment" class="form-input" type="text" name="reviewer_comment" maxlength="{{ max_comment_len }}" style="width: 100%; margin: 0.25rem 0 var(--space-sm);">
+                        <button type="submit" class="btn btn-secondary" style="padding: 0.55rem 1.25rem;">Reject</button>
+                        <span style="font-size: 0.8rem; color: var(--text-muted); margin-left: var(--space-sm);">Creates no requirement.</span>
+                    </form>
+                </section>
+                {% else %}
+                <section style="background: var(--surface-primary); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: var(--space-lg);">
+                    <h2 style="font-size: 1rem; font-weight: 700; margin-bottom: var(--space-xs);">Already decided</h2>
+                    <p style="font-size: 0.9rem; color: var(--text-secondary);">
+                        This candidate is <strong>{{ candidate.candidate_status }}</strong>
+                        {%- if candidate.reviewed_at %} as of {{ candidate.reviewed_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}.
+                        A decided candidate cannot be reviewed again.
+                    </p>
+                    {% if candidate.reviewer_comment %}
+                    <p style="font-size: 0.85rem; color: var(--text-secondary); margin-top: var(--space-sm);">Reviewer comment: {{ candidate.reviewer_comment }}</p>
+                    {% endif %}
+                    {% if promoted_requirement_id %}
+                    <p style="font-size: 0.85rem; margin-top: var(--space-sm);">
+                        <a href="/requirements/{{ promoted_requirement_id }}/workspace">Open the requirement this produced &rarr;</a>
+                    </p>
+                    {% endif %}
+                    <p style="margin-top: var(--space-md);">
+                        <a href="/compliance/requirement-candidates" class="btn btn-secondary" style="padding: 0.5rem 1.1rem; text-decoration: none;">Back to queue</a>
+                    </p>
+                </section>
+                {% endif %}
+            </main>
+        </div>
+    </div>
+</body>
+</html>

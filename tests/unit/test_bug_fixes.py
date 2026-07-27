@@ -11,6 +11,7 @@ from app.models.project import ProposalProject
 from app.models.requirement import Requirement
 from app.models.response import DraftResponse
 from app.services.extractor import _extract_docx
+from app.services.ingestion_state import IngestionStatus
 from app.services.project_service import process_document_background
 from app.services.retriever import retrieve_evidence
 
@@ -137,6 +138,7 @@ def test_retrieve_evidence_preserves_hyphens(db):
         doc_role="knowledge_base",
         processing_status="completed",
         approval_status="APPROVED",
+        ingestion_status=IngestionStatus.COMPLETED,
     )
     db.add(doc)
     db.commit()
