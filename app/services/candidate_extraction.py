@@ -40,11 +40,16 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.observability import request_id_var
 from app.models.audit import AuditEvent
 from app.models.document import Document, DocumentPage
 from app.models.extraction import (
     AUDIT_CANDIDATE_SUPERSEDED,
+    AUDIT_EXTRACTION_COMPLETED,
+    AUDIT_EXTRACTION_FAILED,
+    AUDIT_EXTRACTION_INPUT_LIMIT,
+    AUDIT_EXTRACTION_STARTED,
     CANDIDATE_REVIEW_TASK_TYPE,
     CANDIDATE_STATUS_PROPOSED,
     CANDIDATE_STATUS_SUPERSEDED,
@@ -61,11 +66,13 @@ from app.models.extraction import (
 )
 from app.models.project import ProposalProject
 from app.services.extraction_contract import (
+    SCHEMA_VERSION,
     ExtractionRequest,
     ExtractionResponse,
     SourceUnit,
     find_unsafe_content,
 )
+from app.services.extraction_prompt import PROMPT_VERSION as _PROMPT_VERSION
 from app.services.ingestion_state import IngestionStatus
 from app.services.requirement_extractor import (
     ExtractionError,
@@ -74,8 +81,11 @@ from app.services.requirement_extractor import (
 
 logger = logging.getLogger(__name__)
 
-EXTRACTION_SCHEMA_VERSION = "requirement-candidates-v1"
-PROMPT_VERSION = "pass1-fixture-v1"  # updated when a real prompt is introduced
+EXTRACTION_SCHEMA_VERSION = SCHEMA_VERSION
+# Sourced from the prompt module so the run identity always reflects the actual
+# policy text sent to the provider: editing the policy without bumping this
+# would let a run deduplicate against one produced by a different prompt.
+PROMPT_VERSION = _PROMPT_VERSION
 
 # Fixed failure codes — never include source text.
 _FAIL_NOT_COMPLETED = "DOCUMENT_NOT_COMPLETED"
@@ -86,6 +96,7 @@ _FAIL_PAGE_HASH_MISMATCH = "PAGE_CONTENT_HASH_MISMATCH"
 _FAIL_EXTRACTOR = "EXTRACTOR_FAILED"
 _FAIL_PERSISTENCE = "PERSISTENCE_FAILED"
 _FAIL_STALE_ATTEMPT = "STALE_EXTRACTION_ATTEMPT"
+_FAIL_INPUT_LIMIT = "EXTRACTION_INPUT_LIMIT"
 
 # Candidate-local skip reasons. These never fail the run; they are counted into
 # ExtractionRun.validation_issue_counts so the gap between what the extractor
@@ -202,6 +213,47 @@ def create_requirement_candidates(
                 f"DocumentPage {page.id} content hash does not match its content",
             )
 
+    # Input budget. Enforced before the run row exists so an oversized document
+    # never occupies a RUNNING run, and fails closed rather than truncating:
+    # a silently truncated extraction reports success while dropping real
+    # requirements, which is the one failure a compliance matrix cannot absorb.
+    # Deterministic multi-batch extraction is deferred to a later pass.
+    total_chars = sum(len(p.content) for p in pages)
+    max_units = settings.REQUIREMENT_EXTRACTION_MAX_SOURCE_UNITS
+    max_chars = settings.REQUIREMENT_EXTRACTION_MAX_INPUT_CHARS
+    if len(pages) > max_units or total_chars > max_chars:
+        db.rollback()
+        _record_extraction_audit(
+            db,
+            organization_id=organization_id,
+            project_id=project.id,
+            document_id=document_id,
+            run_id=None,
+            action=AUDIT_EXTRACTION_INPUT_LIMIT,
+            details={
+                "page_count": len(pages),
+                "total_characters": total_chars,
+                "max_source_units": max_units,
+                "max_input_characters": max_chars,
+                "result_code": _FAIL_INPUT_LIMIT,
+            },
+        )
+        logger.warning(
+            "extraction.input_limit: document_id=%s pages=%d chars=%d "
+            "max_pages=%d max_chars=%d",
+            document_id,
+            len(pages),
+            total_chars,
+            max_units,
+            max_chars,
+        )
+        raise ExtractionServiceError(
+            _FAIL_INPUT_LIMIT,
+            f"Document exceeds extraction input limits "
+            f"({len(pages)} units / {total_chars} characters); "
+            "operator action required",
+        )
+
     snapshot_sha256 = _compute_snapshot_sha256(pages)
 
     # Idempotency: reject if a COMPLETED run already exists for this snapshot
@@ -250,12 +302,27 @@ def create_requirement_candidates(
 
     logger.info(
         "extraction.started: run_id=%s document_id=%s pages=%d "
-        "schema_version=%s prompt_version=%s",
+        "schema_version=%s prompt_version=%s provider=%s",
         run_id,
         document_id,
         len(pages),
         EXTRACTION_SCHEMA_VERSION,
         PROMPT_VERSION,
+        extractor.provider_name,
+    )
+    _record_extraction_audit(
+        db,
+        organization_id=organization_id,
+        project_id=project.id,
+        document_id=document_id,
+        run_id=run_id,
+        action=AUDIT_EXTRACTION_STARTED,
+        details={
+            "page_count": len(pages),
+            "total_characters": total_chars,
+            "provider": extractor.provider_name,
+            "model": extractor.model_name,
+        },
     )
 
     # ------------------------------------------------------------------
@@ -284,19 +351,43 @@ def create_requirement_candidates(
     try:
         response: ExtractionResponse = extractor.extract(request)
     except ExtractionError as err:
+        _record_provider_usage(db, run_id, extractor)
         _mark_run_failed(db, run_id, err.code)
+        _record_extraction_audit(
+            db,
+            organization_id=organization_id,
+            project_id=project.id,
+            document_id=document_id,
+            run_id=run_id,
+            action=AUDIT_EXTRACTION_FAILED,
+            details={"result_code": err.code, "provider": extractor.provider_name},
+        )
         raise ExtractionServiceError(err.code, err.message) from err
     except Exception as err:
+        _record_provider_usage(db, run_id, extractor)
         _mark_run_failed(db, run_id, _FAIL_EXTRACTOR)
         logger.error(
             "extraction.extractor_error: run_id=%s type=%s",
             run_id,
             type(err).__name__,
         )
+        _record_extraction_audit(
+            db,
+            organization_id=organization_id,
+            project_id=project.id,
+            document_id=document_id,
+            run_id=run_id,
+            action=AUDIT_EXTRACTION_FAILED,
+            details={"result_code": _FAIL_EXTRACTOR},
+        )
         raise ExtractionServiceError(
             _FAIL_EXTRACTOR,
             f"Extractor raised unexpected exception: {type(err).__name__}",
         ) from err
+
+    # Usage accounting is recorded before persistence so token spend is
+    # captured even if the write phase later fails.
+    _record_provider_usage(db, run_id, extractor)
 
     # ------------------------------------------------------------------
     # Phase C: Validation and atomic persistence
@@ -331,6 +422,34 @@ def create_requirement_candidates(
         run_id,
         completed_run.candidate_count if completed_run else 0,
     )
+    _record_extraction_audit(
+        db,
+        organization_id=organization_id,
+        project_id=project.id,
+        document_id=document_id,
+        run_id=run_id,
+        action=AUDIT_EXTRACTION_COMPLETED,
+        details={
+            "provider": extractor.provider_name,
+            "model": extractor.model_name,
+            "received_candidate_count": completed_run.received_candidate_count
+            if completed_run
+            else 0,
+            "accepted_candidate_count": completed_run.accepted_candidate_count
+            if completed_run
+            else 0,
+            "skipped_candidate_count": completed_run.skipped_candidate_count
+            if completed_run
+            else 0,
+            "provider_call_count": completed_run.provider_call_count
+            if completed_run
+            else 0,
+            "input_tokens": completed_run.input_tokens if completed_run else 0,
+            "output_tokens": completed_run.output_tokens if completed_run else 0,
+            "duration_ms": completed_run.duration_ms if completed_run else 0,
+            "result_code": "EXTRACTION_OK",
+        },
+    )
     return completed_run  # type: ignore[return-value]
 
 
@@ -345,6 +464,89 @@ def _mark_run_failed(db: Session, run_id: uuid.UUID, code: str) -> None:
             db.commit()
     except Exception:
         logger.exception("extraction.mark_failed: could not mark run %s FAILED", run_id)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _record_extraction_audit(
+    db: Session,
+    organization_id: uuid.UUID,
+    project_id: uuid.UUID,
+    document_id: uuid.UUID,
+    run_id: uuid.UUID | None,
+    action: str,
+    details: dict[str, object],
+) -> None:
+    """Write a fixed extraction audit event and commit it.
+
+    Payloads carry IDs, versions, counts, and fixed result codes only. No
+    prompt, no source text, no model output, no credentials, and no raw
+    exception ever reaches an audit row.
+
+    Auditing must never be the reason an extraction fails, so a failure here is
+    logged and swallowed rather than propagated.
+    """
+    try:
+        payload: dict[str, object] = {
+            "project_id": str(project_id),
+            "document_id": str(document_id),
+            "extraction_schema_version": EXTRACTION_SCHEMA_VERSION,
+            "prompt_version": PROMPT_VERSION,
+        }
+        payload.update(details)
+        db.add(
+            AuditEvent(
+                organization_id=organization_id,
+                user_id=None,
+                action=action,
+                entity_type="ExtractionRun",
+                entity_id=run_id or document_id,
+                details=payload,
+                request_id=request_id_var.get(),
+            )
+        )
+        db.commit()
+    except Exception:
+        logger.exception(
+            "extraction.audit_failed: action=%s document_id=%s", action, document_id
+        )
+        try:
+            db.rollback()
+        except Exception:
+            pass
+
+
+def _record_provider_usage(
+    db: Session, run_id: uuid.UUID, extractor: RequirementExtractor
+) -> None:
+    """Persist token/cache/latency counters reported by the extractor.
+
+    Reads a duck-typed ``usage`` attribute so extractors that do not call a
+    provider (fixture, disabled) contribute nothing and need no special case.
+    Counters only -- prompts and responses are never persisted.
+    """
+    usage = getattr(extractor, "usage", None)
+    if usage is None:
+        return
+    try:
+        run = db.get(ExtractionRun, run_id)
+        if run is None:
+            return
+        run.provider_call_count = int(getattr(usage, "provider_call_count", 0) or 0)
+        run.input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+        run.output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        run.cache_creation_input_tokens = int(
+            getattr(usage, "cache_creation_input_tokens", 0) or 0
+        )
+        run.cache_read_input_tokens = int(
+            getattr(usage, "cache_read_input_tokens", 0) or 0
+        )
+        run.duration_ms = int(getattr(usage, "duration_ms", 0) or 0)
+        db.commit()
+    except Exception:
+        logger.exception("extraction.usage_record_failed: run_id=%s", run_id)
         try:
             db.rollback()
         except Exception:

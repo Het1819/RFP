@@ -99,6 +99,14 @@ AUDIT_CANDIDATE_CONFLICT = "candidate_review_conflict"
 AUDIT_CANDIDATE_SUPERSEDED = "candidate_superseded"
 AUDIT_CANDIDATE_UNAUTHORIZED = "candidate_review_unauthorized"
 
+# Extraction lifecycle audit actions (A5f Pass 2B1).
+AUDIT_EXTRACTION_QUEUED = "extraction_queued"
+AUDIT_EXTRACTION_STARTED = "extraction_started"
+AUDIT_EXTRACTION_COMPLETED = "extraction_completed"
+AUDIT_EXTRACTION_FAILED = "extraction_failed"
+AUDIT_EXTRACTION_RETRY_SCHEDULED = "extraction_retry_scheduled"
+AUDIT_EXTRACTION_INPUT_LIMIT = "extraction_input_limit_exceeded"
+
 # Reviewer-supplied text for an EDITED decision.
 MAX_REVIEWER_EDITED_TEXT_LEN = 2000
 MAX_REVIEWER_COMMENT_LEN = 1000
@@ -189,6 +197,27 @@ class ExtractionRun(Base):
     # document and must not be persisted or logged.
     validation_issue_counts: Mapped[dict[str, int] | None] = mapped_column(
         _JSON_COUNTS_TYPE, nullable=True
+    )
+
+    # Provider usage accounting. Counters only -- the prompt, the source pages,
+    # and the model's raw response are never persisted anywhere.
+    provider_call_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    input_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    output_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    cache_creation_input_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    cache_read_input_tokens: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    duration_ms: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
     )
 
     failure_code: Mapped[str | None] = mapped_column(String(100), nullable=True)

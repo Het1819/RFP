@@ -86,6 +86,42 @@ class DisabledRequirementExtractor(RequirementExtractor):
         )
 
 
+def build_requirement_extractor() -> RequirementExtractor:
+    """Construct the configured extractor.
+
+    Provider selection comes from trusted settings only -- there is no
+    parameter, header, or form field anywhere that can influence which
+    implementation is returned.
+
+    There is deliberately **no fallback path**: if the configured provider
+    cannot be built, this raises rather than quietly degrading to the fixture
+    extractor. Silently substituting deterministic stub output for real
+    extraction would produce candidates that look genuine and are not.
+    """
+    from app.core.config import settings
+
+    provider = settings.REQUIREMENT_EXTRACTOR_PROVIDER
+
+    if provider == "anthropic":
+        from app.services.anthropic_extractor import AnthropicRequirementExtractor
+
+        return AnthropicRequirementExtractor()
+
+    if provider == "fixture":
+        if settings.APP_ENV not in ("development", "local", "test"):
+            # Defence in depth: the settings validator already rejects this at
+            # startup, but the guard is repeated here so no future caller can
+            # reach the fixture extractor in production by constructing
+            # Settings directly.
+            raise ExtractionError(
+                EXTRACTOR_NOT_CONFIGURED,
+                "The fixture extractor is not permitted in this environment",
+            )
+        return FixtureRequirementExtractor()
+
+    return DisabledRequirementExtractor()
+
+
 class FixtureRequirementExtractor(RequirementExtractor):
     """Deterministic fixture extractor for tests — no network, no model calls.
 

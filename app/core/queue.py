@@ -414,6 +414,126 @@ def enqueue_promotion_job(
 
 
 # ---------------------------------------------------------------------------
+# A5f requirement extraction enqueue path
+# ---------------------------------------------------------------------------
+# Structurally parallel to the scan/promotion/parse paths above. The payload is
+# deliberately two identifiers and nothing else: no document text, no filename,
+# no storage path, no credentials, and no provider or model choice. Everything
+# the worker needs beyond those two IDs it re-reads from the database or from
+# trusted settings, so a queue entry is never a channel for influencing which
+# model runs or what it is shown.
+
+_EXTRACTION_ENQUEUE_FAILED_REASON = "EXTRACTION_QUEUE_FAILED"
+
+
+async def _enqueue_extraction_to_redis(
+    document_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    *,
+    defer_by: float | None = None,
+) -> None:
+    from arq import create_pool
+    from arq.connections import RedisSettings
+
+    redis = await create_pool(RedisSettings.from_dsn(settings.effective_redis_url))
+    await redis.enqueue_job(
+        "extract_requirements_task",
+        str(document_id),
+        str(organization_id),
+        _defer_by=defer_by,
+    )
+    await redis.close()
+
+
+def _handle_extraction_enqueue_failure(
+    document_id: uuid.UUID, organization_id: uuid.UUID, exc: BaseException
+) -> None:
+    """Record a failed extraction enqueue without disturbing the document.
+
+    The document stays COMPLETED and its pages stay intact: a queue outage is
+    not a parse failure, and rolling the document back would destroy good work.
+    The audit row is what makes the gap reconcilable -- a later re-enqueue for
+    the same document is idempotent, because a completed run for an unchanged
+    snapshot is refused by the orchestration service.
+    """
+    logger.error(
+        "enqueue_extraction_job: failed to enqueue extraction for document %s (%s)",
+        document_id,
+        type(exc).__name__,
+    )
+    try:
+        from app.core.database import SessionLocal
+        from app.models.audit import AuditEvent
+        from app.models.extraction import AUDIT_EXTRACTION_FAILED
+
+        db = SessionLocal()
+        try:
+            db.add(
+                AuditEvent(
+                    organization_id=organization_id,
+                    user_id=None,
+                    action=AUDIT_EXTRACTION_FAILED,
+                    entity_type="Document",
+                    entity_id=document_id,
+                    details={"result_code": _EXTRACTION_ENQUEUE_FAILED_REASON},
+                )
+            )
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.exception(
+            "enqueue_extraction_job: audit logging failed for %s", document_id
+        )
+
+
+def enqueue_extraction_job(document_id: uuid.UUID, organization_id: uuid.UUID) -> None:
+    """Enqueue one requirement-extraction attempt.
+
+    Must only be called after the COMPLETED transition and the DocumentPage
+    rows have been committed: the worker re-reads both, and a job that races
+    ahead of the commit would find an incomplete document and fail closed for
+    no reason.
+
+    Extraction is never run inline from an HTTP route. When the queue is
+    disabled the job is simply skipped rather than executed synchronously -- a
+    provider call inside a request would put a multi-minute, externally
+    dependent operation on the user's connection.
+    """
+    if not settings.QUEUE_ENABLED:
+        logger.info(
+            "enqueue_extraction_job: queue disabled, skipping extraction for %s",
+            document_id,
+        )
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop is not None:
+        task = loop.create_task(
+            _enqueue_extraction_to_redis(document_id, organization_id)
+        )
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
+
+        def _on_done(t: asyncio.Task[Any]) -> None:
+            exc = t.exception() if not t.cancelled() else None
+            if exc is not None:
+                _handle_extraction_enqueue_failure(document_id, organization_id, exc)
+
+        task.add_done_callback(_on_done)
+        return
+
+    try:
+        asyncio.run(_enqueue_extraction_to_redis(document_id, organization_id))
+    except Exception as exc:
+        _handle_extraction_enqueue_failure(document_id, organization_id, exc)
+
+
+# ---------------------------------------------------------------------------
 # A5e document parse enqueue path
 # ---------------------------------------------------------------------------
 

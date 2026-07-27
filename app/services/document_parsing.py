@@ -221,6 +221,19 @@ def persist_parse_results(
 
     db.commit()
 
+    # Requirement extraction is enqueued only after COMPLETED and the
+    # DocumentPage rows are durably committed. The extraction worker re-reads
+    # both and snapshots the page hashes, so a job that overtook this commit
+    # would see an incomplete document and fail closed for no reason.
+    #
+    # A failure to enqueue is deliberately not allowed to fail the parse: the
+    # document stays COMPLETED with its pages intact, the miss is audited, and
+    # a later re-enqueue is idempotent because a completed run for an unchanged
+    # snapshot is refused by the orchestration service.
+    from app.core.queue import enqueue_extraction_job
+
+    enqueue_extraction_job(doc.id, snapshot.org_id)
+
 
 def fail_parse_attempt(
     db: Session,

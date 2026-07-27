@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import uuid
 from typing import Any, ClassVar
 
@@ -12,6 +13,8 @@ from app.models.job import ProcessingJob
 from app.services.ingestion_state import IngestionStatus
 from app.services.malware_scan import prepare_scan_attempt, run_scan
 from app.services.project_service import process_job_pipeline_async
+
+logger = logging.getLogger(__name__)
 
 
 async def process_document_task(ctx: Any, job_id_str: str) -> None:
@@ -134,12 +137,61 @@ async def parse_document_task(ctx: Any, document_id_str: str) -> None:
     await run_parse_pipeline_async(document_id)
 
 
+async def extract_requirements_task(
+    ctx: Any, document_id_str: str, organization_id_str: str
+) -> None:
+    """A5f Pass 2B1 worker entry point: extract requirement candidates.
+
+    The worker owns its own database session, re-derives everything it needs
+    from `document_id` and `organization_id`, and builds the extractor from
+    trusted settings -- the job payload can influence neither the provider nor
+    the prompt.
+
+    This task never creates an authoritative Requirement, never approves a
+    candidate, and never calls a review route. Its entire output is PROPOSED
+    candidates plus their review tasks; promotion stays behind the human
+    review service added in Pass 2A.
+    """
+    from app.core.database import SessionLocal as _SessionLocal
+    from app.services.candidate_extraction import (
+        ExtractionServiceError,
+        create_requirement_candidates,
+    )
+    from app.services.requirement_extractor import build_requirement_extractor
+
+    document_id = uuid.UUID(document_id_str)
+    organization_id = uuid.UUID(organization_id_str)
+
+    db = _SessionLocal()
+    try:
+        extractor = build_requirement_extractor()
+        create_requirement_candidates(db, document_id, organization_id, extractor)
+    except ExtractionServiceError as err:
+        # Terminal, already recorded on the run with a fixed code. Retrying a
+        # deterministic rejection (input limit, snapshot drift, schema failure)
+        # would just burn provider budget reproducing the same outcome; only
+        # transient provider faults are retried, and that happens inside the
+        # adapter where the distinction is actually visible.
+        logger.warning(
+            "extract_requirements_task: extraction failed for %s (%s)",
+            document_id,
+            err.code,
+        )
+    except Exception:
+        logger.exception(
+            "extract_requirements_task: unexpected failure for %s", document_id
+        )
+    finally:
+        db.close()
+
+
 class WorkerSettings:
     functions: ClassVar[list[Any]] = [
         process_document_task,
         scan_document_task,
         promote_document_task,
         parse_document_task,
+        extract_requirements_task,
     ]
     redis_settings = RedisSettings.from_dsn(settings.effective_redis_url)
     job_timeout = settings.JOB_TIMEOUT_SECONDS
