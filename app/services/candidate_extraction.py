@@ -40,15 +40,21 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.observability import request_id_var
+from app.models.audit import AuditEvent
 from app.models.document import Document, DocumentPage
 from app.models.extraction import (
+    AUDIT_CANDIDATE_SUPERSEDED,
     CANDIDATE_REVIEW_TASK_TYPE,
     CANDIDATE_STATUS_PROPOSED,
+    CANDIDATE_STATUS_SUPERSEDED,
     EXTRACTION_STATUS_COMPLETED,
     EXTRACTION_STATUS_FAILED,
     EXTRACTION_STATUS_RUNNING,
     MAX_EVIDENCE_TEXT_LEN,
     MAX_REQUIREMENT_TEXT_LEN,
+    REVIEW_TASK_STATUS_OPEN,
+    REVIEW_TASK_STATUS_SUPERSEDED,
     CandidateReviewTask,
     ExtractionRun,
     RequirementCandidate,
@@ -77,11 +83,20 @@ _FAIL_TENANT_MISMATCH = "TENANT_MISMATCH"
 _FAIL_DUPLICATE_RUN = "DUPLICATE_COMPLETED_RUN"
 _FAIL_SNAPSHOT_MISMATCH = "SNAPSHOT_HASH_MISMATCH"
 _FAIL_PAGE_HASH_MISMATCH = "PAGE_CONTENT_HASH_MISMATCH"
-_FAIL_VALIDATION = "EXTRACTION_RESPONSE_INVALID"
 _FAIL_EXTRACTOR = "EXTRACTOR_FAILED"
 _FAIL_PERSISTENCE = "PERSISTENCE_FAILED"
 _FAIL_STALE_ATTEMPT = "STALE_EXTRACTION_ATTEMPT"
-_FAIL_CONTENT_REJECTED = "CANDIDATE_CONTENT_REJECTED"
+
+# Candidate-local skip reasons. These never fail the run; they are counted into
+# ExtractionRun.validation_issue_counts so the gap between what the extractor
+# proposed and what was persisted stays auditable without retaining any raw
+# rejected content.
+_SKIP_UNKNOWN_SOURCE_UNIT = "SKIP_UNKNOWN_SOURCE_UNIT"
+_SKIP_INVALID_SPAN = "SKIP_INVALID_SPAN"
+_SKIP_EMPTY_EVIDENCE = "SKIP_EMPTY_EVIDENCE"
+_SKIP_EVIDENCE_TOO_LONG = "SKIP_EVIDENCE_TOO_LONG"
+_SKIP_REQUIREMENT_TEXT_BOUNDS = "SKIP_REQUIREMENT_TEXT_BOUNDS"
+_SKIP_DUPLICATE_CANDIDATE = "SKIP_DUPLICATE_CANDIDATE"
 
 
 class ExtractionServiceError(Exception):
@@ -336,6 +351,73 @@ def _mark_run_failed(db: Session, run_id: uuid.UUID, code: str) -> None:
             pass
 
 
+def _supersede_stale_candidates(
+    db: Session,
+    organization_id: uuid.UUID,
+    document_id: uuid.UUID,
+    current_run_id: uuid.UUID,
+) -> int:
+    """Mark PROPOSED candidates from earlier runs of this document SUPERSEDED.
+
+    Tenant-scoped and idempotent: a second call finds nothing left in PROPOSED
+    and is a no-op. Writes an audit event only when something actually changed,
+    and only ever transitions PROPOSED -- reviewed candidates and any
+    Requirements promoted from them are left untouched.
+    """
+    stale = list(
+        db.scalars(
+            select(RequirementCandidate).where(
+                RequirementCandidate.organization_id == organization_id,
+                RequirementCandidate.document_id == document_id,
+                RequirementCandidate.extraction_run_id != current_run_id,
+                RequirementCandidate.candidate_status == CANDIDATE_STATUS_PROPOSED,
+            )
+        )
+    )
+    if not stale:
+        return 0
+
+    now = datetime.now(UTC)
+    project_id = stale[0].project_id
+    for candidate in stale:
+        candidate.candidate_status = CANDIDATE_STATUS_SUPERSEDED
+
+    # Close the open review tasks for those candidates so a reviewer is not
+    # asked to decide on a proposal that no longer reflects the document.
+    open_tasks = list(
+        db.scalars(
+            select(CandidateReviewTask).where(
+                CandidateReviewTask.organization_id == organization_id,
+                CandidateReviewTask.candidate_id.in_([c.id for c in stale]),
+                CandidateReviewTask.status == REVIEW_TASK_STATUS_OPEN,
+            )
+        )
+    )
+    for task in open_tasks:
+        task.status = REVIEW_TASK_STATUS_SUPERSEDED
+        task.resolved_at = now
+
+    db.add(
+        AuditEvent(
+            organization_id=organization_id,
+            user_id=None,
+            action=AUDIT_CANDIDATE_SUPERSEDED,
+            entity_type="ExtractionRun",
+            entity_id=current_run_id,
+            details={
+                "project_id": str(project_id),
+                "document_id": str(document_id),
+                "superseded_candidate_count": len(stale),
+                "closed_task_count": len(open_tasks),
+                "extraction_schema_version": EXTRACTION_SCHEMA_VERSION,
+                "result_code": AUDIT_CANDIDATE_SUPERSEDED,
+            },
+            request_id=request_id_var.get(),
+        )
+    )
+    return len(stale)
+
+
 def _persist_candidates(
     db: Session,
     run_id: uuid.UUID,
@@ -390,89 +472,82 @@ def _persist_candidates(
     # Build page lookup by sequence number
     page_by_seq: dict[int, DocumentPage] = {p.page_number: p for p in fresh_pages}
 
-    # Validate and build candidate objects
+    # Every page hash must still describe its content before any candidate is
+    # written. This is document integrity, not per-candidate validity, so it
+    # fails the whole run rather than skipping one item.
+    for source_page in fresh_pages:
+        if not source_page.content_sha256 or source_page.content_sha256 != _sha256_text(
+            source_page.content
+        ):
+            _mark_run_failed(db, run_id, _FAIL_PAGE_HASH_MISMATCH)
+            raise ExtractionServiceError(
+                _FAIL_PAGE_HASH_MISMATCH,
+                f"DocumentPage {source_page.id} content hash "
+                "does not match its content",
+            )
+
+    # Validate and build candidate objects.
+    #
+    # A single malformed candidate is a defect in one item of model output, not
+    # evidence that the document or the run is untrustworthy. Skipping it and
+    # keeping its valid siblings is what a reviewer actually wants: one bad span
+    # out of forty should not discard thirty-nine real requirements. Run-level
+    # integrity failures (document status, snapshot drift, stale attempt, page
+    # hash) are handled above and still fail everything.
     seen_spans: set[tuple[int, int, int, str]] = (
         set()
     )  # (seq, start, end, norm_text[:100])
     candidate_rows: list[RequirementCandidate] = []
     task_rows: list[CandidateReviewTask] = []
+    issue_counts: dict[str, int] = {}
+
+    def _skip(code: str) -> None:
+        """Record a candidate-local rejection by fixed code only."""
+        issue_counts[code] = issue_counts.get(code, 0) + 1
 
     for unit in response.candidates:
         seq = unit.source_unit_sequence
         page = page_by_seq.get(seq)
         if page is None:
-            _mark_run_failed(db, run_id, _FAIL_VALIDATION)
-            raise ExtractionServiceError(
-                _FAIL_VALIDATION,
-                f"Candidate references unknown source_unit_sequence {seq}",
-            )
+            _skip(_SKIP_UNKNOWN_SOURCE_UNIT)
+            continue
 
-        # Re-bind the page hash to the page text one final time before the
-        # candidate is written, so page_content_sha256 provably describes the
-        # content the evidence was sliced out of.
         content = page.content
-        if not page.content_sha256 or page.content_sha256 != _sha256_text(content):
-            _mark_run_failed(db, run_id, _FAIL_PAGE_HASH_MISMATCH)
-            raise ExtractionServiceError(
-                _FAIL_PAGE_HASH_MISMATCH,
-                f"DocumentPage {page.id} content hash does not match its content",
-            )
-
         span_start = unit.span_start
         span_end = unit.span_end
 
         if span_start < 0 or span_end > len(content) or span_end <= span_start:
-            _mark_run_failed(db, run_id, _FAIL_VALIDATION)
-            raise ExtractionServiceError(
-                _FAIL_VALIDATION,
-                f"Invalid span [{span_start}:{span_end}] "
-                f"for page length {len(content)}",
-            )
+            _skip(_SKIP_INVALID_SPAN)
+            continue
 
         evidence = content[span_start:span_end]
         if not evidence.strip():
-            _mark_run_failed(db, run_id, _FAIL_VALIDATION)
-            raise ExtractionServiceError(
-                _FAIL_VALIDATION, "Evidence slice is empty or whitespace-only"
-            )
+            _skip(_SKIP_EMPTY_EVIDENCE)
+            continue
         if len(evidence) > MAX_EVIDENCE_TEXT_LEN:
-            _mark_run_failed(db, run_id, _FAIL_VALIDATION)
-            raise ExtractionServiceError(
-                _FAIL_VALIDATION,
-                f"Evidence length {len(evidence)} exceeds "
-                f"maximum {MAX_EVIDENCE_TEXT_LEN}",
-            )
+            _skip(_SKIP_EVIDENCE_TOO_LONG)
+            continue
 
         req_text = unit.requirement_text.strip()
         if not req_text or len(req_text) > MAX_REQUIREMENT_TEXT_LEN:
-            _mark_run_failed(db, run_id, _FAIL_VALIDATION)
-            raise ExtractionServiceError(
-                _FAIL_VALIDATION,
-                f"requirement_text length {len(req_text)} out of bounds",
-            )
+            _skip(_SKIP_REQUIREMENT_TEXT_BOUNDS)
+            continue
 
         # Duplicate span+text check
         dedup_key = (seq, span_start, span_end, req_text[:100])
         if dedup_key in seen_spans:
-            _mark_run_failed(db, run_id, _FAIL_VALIDATION)
-            raise ExtractionServiceError(
-                _FAIL_VALIDATION,
-                f"Duplicate candidate: seq={seq} span=[{span_start}:{span_end}]",
-            )
+            _skip(_SKIP_DUPLICATE_CANDIDATE)
+            continue
         seen_spans.add(dedup_key)
 
-        # Content policy: neither the candidate text nor the evidence slice may
-        # carry markup, links, storage paths, executable fragments, or text
-        # shaped like instructions. Evidence must stay a byte-exact slice, so
-        # unsafe evidence can only be rejected, never sanitized.
-        for field_text in (req_text, evidence):
-            reject_code = find_unsafe_content(field_text)
-            if reject_code is not None:
-                _mark_run_failed(db, run_id, reject_code)
-                raise ExtractionServiceError(
-                    _FAIL_CONTENT_REJECTED,
-                    f"Candidate rejected by content policy: {reject_code}",
-                )
+        # Character-content policy. URLs, markup, paths, and instruction-shaped
+        # prose are all legitimate RFP text and are retained as inert evidence;
+        # only content that is not usable as text at all (NUL and other control
+        # characters, i.e. binary or truncated data) is rejected.
+        reject_code = find_unsafe_content(req_text) or find_unsafe_content(evidence)
+        if reject_code is not None:
+            _skip(reject_code)
+            continue
 
         evidence_sha = _sha256_text(evidence)
         candidate_id = uuid.uuid4()
@@ -507,17 +582,71 @@ def _persist_candidates(
             extraction_run_id=run_id,
             task_type=CANDIDATE_REVIEW_TASK_TYPE,
             source_locator=page.source_locator or "",
-            status="OPEN",
+            status=REVIEW_TASK_STATUS_OPEN,
         )
         task_rows.append(task)
 
-    # Atomic write: all candidates + tasks + run update in one commit
-    for c in candidate_rows:
-        db.add(c)
-    for t in task_rows:
-        db.add(t)
+    # Supersede older unreviewed proposals for this document. A newer
+    # successful run over a changed page snapshot makes the previous run's
+    # untouched suggestions obsolete, and leaving them PROPOSED would show a
+    # reviewer two competing candidates for the same text.
+    #
+    # Scoped to PROPOSED only: APPROVED, EDITED, and REJECTED are human
+    # decisions and are never rewritten by a machine run. Approved Requirements
+    # are likewise untouched -- reconciling an already-promoted Requirement
+    # against re-extracted text is an explicit workflow, not a side effect.
+    #
+    # Runs before the new rows are added so its SELECT cannot trigger an
+    # autoflush of half-built state.
+    superseded_count = _supersede_stale_candidates(
+        db,
+        organization_id=organization_id,
+        document_id=document_id,
+        current_run_id=run_id,
+    )
+
+    # Atomic write: all candidates + tasks + run update in one commit.
+    #
+    # Candidates are flushed before their review tasks are added. Relying on
+    # the unit of work to infer the order is not good enough: PostgreSQL
+    # enforces the candidate_review_tasks -> requirement_candidates foreign key
+    # immediately, and an autoflush at the wrong moment inserts a task whose
+    # candidate row does not exist yet. Ordering it explicitly makes the write
+    # correct regardless of when a flush happens to fire.
+    db.add_all(candidate_rows)
+    db.flush()
+    db.add_all(task_rows)
+    db.flush()
+
+    received = len(response.candidates)
+    accepted = len(candidate_rows)
 
     run.status = EXTRACTION_STATUS_COMPLETED
-    run.candidate_count = len(candidate_rows)
+    run.candidate_count = accepted
+    run.received_candidate_count = received
+    run.accepted_candidate_count = accepted
+    run.skipped_candidate_count = received - accepted
+    run.validation_issue_counts = issue_counts or None
     run.completed_at = datetime.now(UTC)
     db.commit()
+
+    if superseded_count:
+        logger.info(
+            "extraction.candidates_superseded: run_id=%s document_id=%s count=%d",
+            run_id,
+            document_id,
+            superseded_count,
+        )
+
+    if issue_counts:
+        # Fixed reason codes and counts only -- never the rejected candidate
+        # text, which is untrusted model output over an untrusted document.
+        logger.info(
+            "extraction.candidates_skipped: run_id=%s received=%d accepted=%d "
+            "skipped=%d issues=%s",
+            run_id,
+            received,
+            accepted,
+            received - accepted,
+            sorted(issue_counts.items()),
+        )

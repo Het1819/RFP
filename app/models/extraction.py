@@ -31,6 +31,7 @@ import uuid
 from datetime import UTC, datetime
 
 from sqlalchemy import (
+    JSON,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -39,9 +40,14 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
+
+# Portable JSON column, mirroring app.models.audit: JSONB on PostgreSQL,
+# generic JSON on SQLite so create_all() works in the test suite.
+_JSON_COUNTS_TYPE = JSON().with_variant(JSONB(astext_type=Text()), "postgresql")
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -78,6 +84,24 @@ CANDIDATE_STATUSES = frozenset(
 )
 
 CANDIDATE_REVIEW_TASK_TYPE = "REQUIREMENT_CANDIDATE_REVIEW"
+
+REVIEW_TASK_STATUS_OPEN = "OPEN"
+REVIEW_TASK_STATUS_COMPLETED = "COMPLETED"
+REVIEW_TASK_STATUS_SUPERSEDED = "SUPERSEDED"
+
+# Fixed audit actions for the candidate review lifecycle. Payloads carry IDs,
+# versions, decisions, and fixed result codes only -- never source text,
+# evidence text, model output, secrets, or raw exception detail.
+AUDIT_CANDIDATE_APPROVED = "candidate_review_approved"
+AUDIT_CANDIDATE_EDITED = "candidate_review_edited"
+AUDIT_CANDIDATE_REJECTED = "candidate_review_rejected"
+AUDIT_CANDIDATE_CONFLICT = "candidate_review_conflict"
+AUDIT_CANDIDATE_SUPERSEDED = "candidate_superseded"
+AUDIT_CANDIDATE_UNAUTHORIZED = "candidate_review_unauthorized"
+
+# Reviewer-supplied text for an EDITED decision.
+MAX_REVIEWER_EDITED_TEXT_LEN = 2000
+MAX_REVIEWER_COMMENT_LEN = 1000
 
 # Hard bounds enforced in validation layer and CheckConstraints.
 MAX_REQUIREMENT_TEXT_LEN = 2000
@@ -146,6 +170,27 @@ class ExtractionRun(Base):
     candidate_count: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0", nullable=False
     )
+
+    # Per-run validation accounting. A run can now complete with some
+    # candidates skipped, so the reconciliation between what the extractor
+    # proposed and what was persisted must be visible without re-running
+    # extraction: received == accepted + skipped.
+    received_candidate_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    accepted_candidate_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    skipped_candidate_count: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
+    # {fixed_reason_code: count}. Counts only -- never raw rejected candidate
+    # content, which is untrusted model output derived from an untrusted
+    # document and must not be persisted or logged.
+    validation_issue_counts: Mapped[dict[str, int] | None] = mapped_column(
+        _JSON_COUNTS_TYPE, nullable=True
+    )
+
     failure_code: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
     started_at: Mapped[datetime | None] = mapped_column(
@@ -234,6 +279,12 @@ class RequirementCandidate(Base):
     evidence_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
 
     normalized_requirement_text: Mapped[str] = mapped_column(Text, nullable=False)
+    # Reviewer-authored replacement text for an EDITED decision. Stored
+    # separately so normalized_requirement_text always remains the untouched
+    # machine proposal -- an audit trail of what the model said versus what the
+    # human decided it should say. Unlike evidence_text this is NOT required to
+    # be a source slice: a reviewer may legitimately rewrite a requirement.
+    reviewer_edited_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     requirement_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
     confidence: Mapped[float | None] = mapped_column(nullable=True)
     uncertainty_reason: Mapped[str | None] = mapped_column(String(500), nullable=True)

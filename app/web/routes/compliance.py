@@ -3,7 +3,7 @@ import uuid
 from enum import StrEnum
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BeforeValidator
 from sqlalchemy import select
@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.core.csrf import validate_csrf_token
 from app.core.database import get_db, get_default_org_and_user
 from app.core.security import (
+    ReviewerAuthorizationError,
     get_project_for_org,
     get_requirement_for_org,
 )
@@ -22,6 +23,19 @@ from app.models.audit import AuditEvent
 from app.models.comment import RequirementComment
 from app.models.requirement import Requirement
 from app.models.user import User
+from app.services.candidate_review import (
+    DECISION_APPROVE,
+    DECISION_EDIT,
+    DECISION_REJECT,
+    REVIEW_ALREADY_DECIDED,
+    REVIEW_CONFLICT,
+    REVIEW_NOT_FOUND,
+    CandidateReviewError,
+    review_requirement_candidate,
+)
+from app.services.candidate_review import (
+    ReviewResult as CandidateReviewResult,
+)
 from app.services.project_service import log_audit_event
 
 logger = logging.getLogger(__name__)
@@ -1172,6 +1186,135 @@ def add_comment_action(
     )
     return RedirectResponse(
         url=f"/requirements/{requirement_id}/workspace", status_code=303
+    )
+
+
+# ---------------------------------------------------------------------------
+# Requirement candidate review (A5f Pass 2A)
+# ---------------------------------------------------------------------------
+# Form routes only -- the application has no JSON API surface, and adding one
+# for this would widen the attack surface for no product gain.
+#
+# Every route is deliberately thin: it resolves the session identity, hands the
+# candidate id and the decision to the service, and translates the service's
+# fixed result code into a response. Authorization, locking, source
+# revalidation, and the Requirement insert all live in the service, so the
+# authority boundary cannot be bypassed by any future non-HTTP caller.
+#
+# Nothing about the candidate is accepted from the client except its id and the
+# reviewer's own text: no status, reviewer id, run id, organization id, project
+# id, provenance, or source-candidate linkage is bindable from a form field.
+
+
+def _candidate_review_response(
+    request: Request, result: CandidateReviewResult
+) -> Response:
+    """Translate a completed review into an HTMX-friendly response."""
+    if request.headers.get("hx-request"):
+        return HTMLResponse(
+            content=(
+                f'<div class="candidate-reviewed" '
+                f'data-candidate-id="{result.candidate_id}" '
+                f'data-status="{result.candidate_status}">Review recorded.</div>'
+            ),
+            status_code=200,
+        )
+    return RedirectResponse(url="/projects", status_code=303)
+
+
+def _review_candidate_action(
+    request: Request,
+    db: Session,
+    candidate_id: uuid.UUID,
+    decision: str,
+    edited_text: str | None = None,
+    reviewer_comment: str | None = None,
+) -> Response:
+    org_id, user_id = get_current_org_and_user(request, db)
+    try:
+        result = review_requirement_candidate(
+            db,
+            candidate_id=candidate_id,
+            reviewer_id=user_id,
+            org_id=org_id,
+            decision=decision,
+            edited_text=edited_text,
+            reviewer_comment=reviewer_comment,
+        )
+    except ReviewerAuthorizationError:
+        # Already a non-disclosing HTTPException (404 cross-tenant, 403 for a
+        # member without the capability). Re-raise unchanged.
+        raise
+    except CandidateReviewError as err:
+        if err.code == REVIEW_NOT_FOUND:
+            raise HTTPException(status_code=404, detail="Not found") from None
+        if err.code == REVIEW_CONFLICT or err.code == REVIEW_ALREADY_DECIDED:
+            raise HTTPException(
+                status_code=409, detail="Candidate has already been reviewed"
+            ) from None
+        # Fixed, non-leaking message for every remaining failure (source drift,
+        # bad reviewer text, missing task).
+        raise HTTPException(status_code=400, detail=err.code) from None
+
+    return _candidate_review_response(request, result)
+
+
+@router.post(
+    "/compliance/requirement-candidates/{candidate_id}/approve",
+    dependencies=[Depends(validate_csrf_token)],
+)
+def approve_requirement_candidate(
+    candidate_id: uuid.UUID,
+    request: Request,
+    reviewer_comment: str = Form(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    return _review_candidate_action(
+        request,
+        db,
+        candidate_id,
+        DECISION_APPROVE,
+        reviewer_comment=reviewer_comment,
+    )
+
+
+@router.post(
+    "/compliance/requirement-candidates/{candidate_id}/edit",
+    dependencies=[Depends(validate_csrf_token)],
+)
+def edit_requirement_candidate(
+    candidate_id: uuid.UUID,
+    request: Request,
+    edited_text: str = Form(...),
+    reviewer_comment: str = Form(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    return _review_candidate_action(
+        request,
+        db,
+        candidate_id,
+        DECISION_EDIT,
+        edited_text=edited_text,
+        reviewer_comment=reviewer_comment,
+    )
+
+
+@router.post(
+    "/compliance/requirement-candidates/{candidate_id}/reject",
+    dependencies=[Depends(validate_csrf_token)],
+)
+def reject_requirement_candidate(
+    candidate_id: uuid.UUID,
+    request: Request,
+    reviewer_comment: str = Form(None),
+    db: Session = Depends(get_db),
+) -> Response:
+    return _review_candidate_action(
+        request,
+        db,
+        candidate_id,
+        DECISION_REJECT,
+        reviewer_comment=reviewer_comment,
     )
 
 

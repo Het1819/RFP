@@ -128,79 +128,54 @@ class ExtractionRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Candidate content policy
 # ---------------------------------------------------------------------------
-# AGENTS.md: uploaded documents are untrusted data, never instructions.  A
-# candidate is the first artifact derived from that untrusted text that a human
-# reviewer will read in our own UI, so it must not carry markup, links, storage
-# paths, executable fragments, or text shaped like instructions to an agent.
+# Pass 1 rejected candidates whose text or evidence contained URLs, markup-like
+# characters, filesystem-looking paths, or instruction-shaped phrasing. That was
+# wrong, and it was wrong in the direction that breaks the product: a real RFP
+# routinely says "submit via https://portal.example.gov/bids", quotes an XML
+# schema fragment, references /var/log retention, and phrases mandatory clauses
+# as imperatives ("Disregard the previous revision of Section 4"). Under the old
+# policy any one of those failed the entire extraction run, discarding every
+# valid sibling candidate in the document.
 #
-# These checks apply to BOTH normalized_requirement_text and the evidence
-# slice.  Evidence must remain a byte-exact slice of DocumentPage.content, so
-# it can never be sanitized in place — the only safe response to unsafe
-# evidence is to reject.  Rejection is run-level (consistent with every other
-# validation failure: no partial candidates).  Pass 2 may downgrade this to a
-# per-candidate skip once a real extractor exists and the false-positive rate
-# on genuine RFP prose (which does legitimately contain URLs) can be measured.
+# The premise was also wrong. Those strings are only dangerous if something
+# acts on them, and nothing here does:
+#   - no component fetches or resolves a URL found in document text;
+#   - evidence and candidate text are rendered through Jinja2 autoescaping as
+#     plain text, never as markup;
+#   - source text is never routed back into a model as instructions, and the
+#     extractor is exposed to no tools, functions, or execution surface.
+# Held as inert text under those conditions, an RFP that contains a link or an
+# imperative sentence is just an RFP. Refusing to extract from it protects
+# nothing and loses real requirements.
+#
+# What survives is the narrow set of things that are not meaningful document
+# prose at all: NUL and other disallowed control characters, which indicate
+# binary or truncated content in a field that is supposed to hold text, and
+# which cause real damage downstream (C-string truncation, PostgreSQL text
+# rejection, terminal escape injection in operator tooling).
+#
+# Bounds, span validity, evidence-slice equality, and hash binding are all still
+# enforced -- see candidate_extraction. This function governs character content
+# only.
 
-CONTENT_REJECT_HTML = "CONTENT_REJECT_HTML"
-CONTENT_REJECT_URL = "CONTENT_REJECT_URL"
-CONTENT_REJECT_PATH = "CONTENT_REJECT_PATH"
-CONTENT_REJECT_EXECUTABLE = "CONTENT_REJECT_EXECUTABLE"
-CONTENT_REJECT_INSTRUCTION = "CONTENT_REJECT_INSTRUCTION"
+CONTENT_REJECT_CONTROL_CHARS = "CONTENT_REJECT_CONTROL_CHARS"
 
-_UNSAFE_CONTENT_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    # Markup / tag-shaped content, including tool-call style pseudo-tags.
-    (CONTENT_REJECT_HTML, re.compile(r"<\s*/?\s*[A-Za-z!][^>]*>")),
-    # Any URL scheme, protocol-relative URL, or bare www host.
-    (
-        CONTENT_REJECT_URL,
-        re.compile(
-            r"(?:[A-Za-z][A-Za-z0-9+.-]*://)|(?:^|\s)//[A-Za-z0-9-]|"
-            r"\b(?:javascript|data|file|vbscript)\s*:|"
-            r"(?:^|\s)www\.[A-Za-z0-9-]",
-            re.IGNORECASE,
-        ),
-    ),
-    # Filesystem / storage locations: UNC, Windows drive, common POSIX roots.
-    (
-        CONTENT_REJECT_PATH,
-        re.compile(
-            r"(?:\\\\[A-Za-z0-9._-]+\\)|"
-            r"(?:(?:^|\s)[A-Za-z]:[\\/])|"
-            r"(?:(?:^|\s)/(?:etc|var|tmp|usr|opt|proc|root|home|app|mnt|srv)/)",
-        ),
-    ),
-    # Executable / interpolation fragments.
-    (
-        CONTENT_REJECT_EXECUTABLE,
-        re.compile(
-            r"(?:^|\s)#!/|\$\{|\beval\s*\(|\bexec\s*\(|"
-            r"\bos\.system\s*\(|\bsubprocess\b|`[^`]*`",
-            re.IGNORECASE,
-        ),
-    ),
-    # Text shaped like instructions to a model or an agent tool surface.
-    (
-        CONTENT_REJECT_INSTRUCTION,
-        re.compile(
-            r"\bignore\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above)\b|"
-            r"\bdisregard\s+(?:all\s+)?(?:the\s+)?(?:previous|prior|above)\b|"
-            r"\bsystem\s+prompt\b|\byou\s+are\s+an?\s+(?:ai|assistant|agent)\b|"
-            r"\bnew\s+instructions\b|\btool_call\b|\bfunction_call\b|"
-            r"^\s*(?:assistant|system|user)\s*:",
-            re.IGNORECASE | re.MULTILINE,
-        ),
-    ),
-)
+# Allowed: tab, newline, carriage return. Everything else in C0, plus DEL and
+# the C1 block, is disallowed in a text field.
+_DISALLOWED_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 
 
 def find_unsafe_content(text: str) -> str | None:
-    """Return a fixed rejection code if ``text`` violates the content policy.
+    """Return a fixed rejection code if ``text`` is not usable as plain text.
 
-    Returns ``None`` when the text is safe.  The return value is a fixed code
-    and never contains any part of ``text``, so it is safe to log and to store
-    in ``ExtractionRun.failure_code``.
+    Returns ``None`` when the text is acceptable. URLs, markup-like characters,
+    paths, and instruction-shaped prose are all acceptable: they are retained as
+    inert text and are never fetched, rendered as markup, or interpreted as
+    instructions. See the module comment above for why.
+
+    The return value is a fixed code that never contains any part of ``text``,
+    so it is safe to log and to store in a counter.
     """
-    for code, pattern in _UNSAFE_CONTENT_PATTERNS:
-        if pattern.search(text):
-            return code
+    if _DISALLOWED_CONTROL_CHARS.search(text):
+        return CONTENT_REJECT_CONTROL_CHARS
     return None
