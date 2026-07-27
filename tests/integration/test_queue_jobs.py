@@ -10,11 +10,18 @@ from app.models.document import Document, DocumentPage
 from app.models.job import ProcessingJob
 from app.models.project import ProposalProject
 from app.models.requirement import Requirement
+from app.services.ingestion_state import IngestionStatus
 from tests.integration.test_csrf import extract_csrf_token
 
 
-def test_upload_creates_job_with_queue_enabled(client, db, monkeypatch):
-    """Proves uploading an RFP creates a ProcessingJob and sets status to pending."""
+def test_upload_never_creates_legacy_job_even_with_queue_enabled(
+    client, db, monkeypatch
+):
+    """A5b: RFP uploads route through quarantine-first ingestion and stop
+    at SCANNING/REJECTED_TYPE - no legacy document_processing job is ever
+    enqueued, even when QUEUE_ENABLED=True. This supersedes the pre-A5b
+    behavior where uploading synchronously created and ran a
+    ProcessingJob."""
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "QUEUE_ENABLED", True)
@@ -24,6 +31,15 @@ def test_upload_creates_job_with_queue_enabled(client, db, monkeypatch):
         pass
 
     monkeypatch.setattr("app.core.queue.enqueue_to_redis", mock_enqueue)
+
+    # A5c Task 6: reaching SCANNING now also calls enqueue_scan_job(),
+    # which with QUEUE_ENABLED=True would try to enqueue to a real Redis
+    # instance via arq. Mock the same way, so this test keeps asserting
+    # legacy-ProcessingJob behavior in isolation from the scanner.
+    async def mock_enqueue_scan(document_id, *, defer_by=None):
+        pass
+
+    monkeypatch.setattr("app.core.queue._enqueue_scan_to_redis", mock_enqueue_scan)
 
     org_id, user_id = get_default_org_and_user(db)
     proj = ProposalProject(
@@ -40,7 +56,7 @@ def test_upload_creates_job_with_queue_enabled(client, db, monkeypatch):
     csrf_token = extract_csrf_token(response_get.text)
 
     # Perform upload (don't follow redirects to check 303)
-    pdf_content = b"%PDF-1.4 mock content"
+    pdf_content = b"%PDF-1.4\n" + b"x" * 200 + b"\n%%EOF"
     response = client.post(
         f"/projects/{proj.id}/upload",
         data={"csrf_token": csrf_token},
@@ -50,20 +66,19 @@ def test_upload_creates_job_with_queue_enabled(client, db, monkeypatch):
 
     assert response.status_code == 303
 
-    # Check Document status
+    # Check Document status: quarantine-first ingestion, not the legacy
+    # pending/processing/completed pipeline.
     doc = db.scalar(
         select(Document).where(
             Document.project_id == proj.id, Document.doc_role == "rfp"
         )
     )
     assert doc is not None
-    assert doc.processing_status == "pending"
+    assert doc.ingestion_status == IngestionStatus.SCANNING
 
-    # Check ProcessingJob status
+    # No legacy ProcessingJob is created by the upload route anymore.
     job = db.scalar(select(ProcessingJob).where(ProcessingJob.document_id == doc.id))
-    assert job is not None
-    assert job.status == "QUEUED"
-    assert job.progress_percent == 0
+    assert job is None
 
 
 def test_job_idempotency_prevents_duplication(client, db, monkeypatch):
@@ -96,6 +111,7 @@ def test_job_idempotency_prevents_duplication(client, db, monkeypatch):
         doc_role="rfp",
         processing_status="pending",
         created_by_id=user_id,
+        ingestion_status=IngestionStatus.CLEAN,
     )
     db.add(doc)
     db.commit()
@@ -189,6 +205,7 @@ def test_failed_processing_logs_safe_error(client, db, monkeypatch):
         doc_role="rfp",
         processing_status="pending",
         created_by_id=user_id,
+        ingestion_status=IngestionStatus.CLEAN,
     )
     db.add(doc)
     db.commit()
@@ -274,6 +291,87 @@ def test_foreign_org_validation_for_jobs_and_retry(client, db, monkeypatch):
 
     response_retry = client.post(f"/projects/{proj.id}/documents/{doc.id}/retry")
     assert response_retry.status_code == 404
+
+
+def test_retry_route_rejects_non_clean_document(client, db):
+    """The retry route must never re-enqueue a document whose
+    ingestion_status is not CLEAN - a quarantined/scanning/rejected
+    document reaching the legacy pipeline here would only be stopped by
+    process_job_pipeline_async's fail-closed backstop, so the route itself
+    must refuse up front instead of relying solely on that backstop."""
+    org_id, user_id = get_default_org_and_user(db)
+    proj = ProposalProject(
+        organization_id=org_id,
+        created_by_id=user_id,
+        name="Retry Guard Project",
+        client_name="Retry Guard Client",
+    )
+    db.add(proj)
+    db.commit()
+
+    doc = Document(
+        project_id=proj.id,
+        name="quarantined.pdf",
+        file_path="mock_path.pdf",
+        file_type="application/pdf",
+        doc_role="rfp",
+        processing_status="failed",
+        ingestion_status=IngestionStatus.QUARANTINED,
+        created_by_id=user_id,
+    )
+    db.add(doc)
+    db.commit()
+
+    response = client.post(
+        f"/projects/{proj.id}/documents/{doc.id}/retry", follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert "error=" in response.headers["location"]
+
+    assert db.query(ProcessingJob).count() == 0
+    db.refresh(doc)
+    # The route must bail out before mutating processing_status/error.
+    assert doc.processing_status == "failed"
+
+
+def test_retry_route_allows_clean_document(client, db):
+    """Sanity check for the guard added above: a CLEAN document must still
+    be retriable through the same route."""
+    org_id, user_id = get_default_org_and_user(db)
+    proj = ProposalProject(
+        organization_id=org_id,
+        created_by_id=user_id,
+        name="Retry Allowed Project",
+        client_name="Retry Allowed Client",
+    )
+    db.add(proj)
+    db.commit()
+
+    doc = Document(
+        project_id=proj.id,
+        name="clean.pdf",
+        file_path="mock_path.pdf",
+        file_type="application/pdf",
+        doc_role="rfp",
+        processing_status="failed",
+        ingestion_status=IngestionStatus.CLEAN,
+        created_by_id=user_id,
+    )
+    db.add(doc)
+    db.commit()
+
+    response = client.post(
+        f"/projects/{proj.id}/documents/{doc.id}/retry", follow_redirects=False
+    )
+    assert response.status_code == 303
+    assert "error=" not in response.headers["location"]
+
+    # With QUEUE_ENABLED=false the job pipeline runs synchronously inline
+    # within the request, so by the time the response comes back
+    # processing_status has already moved past "pending" (and the job will
+    # fail against the fake mock_path.pdf) - that's irrelevant here. The
+    # signal that matters is that the guard did not block enqueueing.
+    assert db.query(ProcessingJob).count() == 1
 
 
 def test_redis_url_enforcement_in_production(monkeypatch):

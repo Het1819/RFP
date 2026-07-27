@@ -8,6 +8,7 @@ from app.core.database import get_default_org_and_user
 from app.models.audit import AuditEvent
 from app.models.document import Document, DocumentPage
 from app.models.project import ProposalProject
+from app.services.ingestion_state import IngestionStatus
 
 
 def create_test_pdf(pages_text: list[str]) -> bytes:
@@ -62,7 +63,16 @@ def test_project_creation_and_listing(client, db):
     assert "Acme Corp" in list_response.text
 
 
-def test_project_detail_and_rfp_upload_flow(client, db, tmp_path):
+def test_project_detail_and_rfp_upload_flow(client, db, tmp_path, monkeypatch):
+    # A5c Task 6: reaching SCANNING now calls enqueue_scan_job(), which
+    # with QUEUE_ENABLED=false (test default) would run a real scan
+    # attempt synchronously in-process (including a real ClamAV socket
+    # connection). Stub it so this test keeps asserting the A5b route/
+    # workflow behavior in isolation from the scanner.
+    import app.core.queue as queue_mod
+
+    monkeypatch.setattr(queue_mod, "enqueue_scan_job", lambda document_id: None)
+
     org_id, user_id = get_default_org_and_user(db)
 
     # 1. Create a project directly in DB
@@ -97,7 +107,11 @@ def test_project_detail_and_rfp_upload_flow(client, db, tmp_path):
     assert upload_resp.status_code == 303
     assert upload_resp.headers["location"] == f"/projects/{project.id}"
 
-    # 5. Verify document in DB (FastAPI TestClient runs BackgroundTasks synchronously)
+    # 5. Verify document in DB. A5b quarantine-first ingestion stops at
+    # SCANNING/REJECTED_TYPE - it never writes to normal storage, never
+    # extracts pages, and never enqueues the legacy document_processing
+    # job, so the document does not reach processing_status="completed"
+    # here (that only happens once A5c+ implements scan/parse promotion).
     doc = db.scalars(
         select(Document).where(
             Document.project_id == project.id, Document.doc_role == "rfp"
@@ -106,48 +120,38 @@ def test_project_detail_and_rfp_upload_flow(client, db, tmp_path):
     assert doc is not None
     assert doc.name == "rfp.pdf"
     assert doc.file_type == "application/pdf"
-    assert doc.processing_status == "completed"
+    assert doc.ingestion_status == IngestionStatus.SCANNING
 
-    # 6. Verify DocumentPages
+    # 6. No DocumentPages exist yet - parsing is out of scope for the
+    # quarantine-first ingestion path.
     pages = db.scalars(
-        select(DocumentPage)
-        .where(DocumentPage.document_id == doc.id)
-        .order_by(DocumentPage.page_number.asc())
+        select(DocumentPage).where(DocumentPage.document_id == doc.id)
     ).all()
-    assert len(pages) == 2
-    assert pages[0].page_number == 1
-    assert "Requirement 1" in pages[0].content
-    assert pages[1].page_number == 2
-    assert "Requirement 2" in pages[1].content
+    assert pages == []
 
-    # 7. Verify audit events (document_upload & document_extraction_success)
-    upload_audit = db.scalars(
+    # 7. Verify audit event for the quarantine write (the legacy
+    # document_upload/document_extraction_success actions are no longer
+    # emitted by this route).
+    quarantine_audit = db.scalars(
         select(AuditEvent).where(
-            AuditEvent.action == "document_upload", AuditEvent.entity_id == doc.id
-        )
-    ).first()
-    assert upload_audit is not None
-
-    success_audit = db.scalars(
-        select(AuditEvent).where(
-            AuditEvent.action == "document_extraction_success",
+            AuditEvent.action == "document_upload_quarantined",
             AuditEvent.entity_id == doc.id,
         )
     ).first()
-    assert success_audit is not None
+    assert quarantine_audit is not None
 
-    # 8. Check project detail page now displays processed document stats
+    # 8. Detail page still renders for a document that is not yet CLEAN.
     detail_after_resp = client.get(f"/projects/{project.id}")
     assert detail_after_resp.status_code == 200
-    assert "PROCESSED" in detail_after_resp.text
-    assert "PAGES EXTRACTED" in detail_after_resp.text
-    assert "2" in detail_after_resp.text  # Page count
 
-    # 9. Try uploading a second RFP document (should fail)
+    # 9. Try uploading a second RFP document while the first is still
+    # active (non-terminal) - should be rejected.
     duplicate_resp = client.post(
         f"/projects/{project.id}/upload",
         files={"file": ("rfp2.pdf", pdf_content, "application/pdf")},
         follow_redirects=False,
     )
     assert duplicate_resp.status_code == 303
-    assert "already has an RFP document" in unquote(duplicate_resp.headers["location"])
+    assert "already has an active RFP document" in unquote(
+        duplicate_resp.headers["location"]
+    )

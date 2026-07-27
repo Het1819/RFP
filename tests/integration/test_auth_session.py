@@ -1,6 +1,7 @@
 import pytest
 from sqlalchemy import select
 
+from app.models.organization import Organization
 from app.models.project import ProposalProject
 from app.models.user import User
 
@@ -133,8 +134,17 @@ def test_logout_clears_session(unauthenticated_client):
     # Verify access allowed
     assert unauthenticated_client.get("/projects").status_code == 200
 
-    # 2. Logout
-    logout_resp = unauthenticated_client.get("/logout", follow_redirects=False)
+    # 2. Logout (POST-only, CSRF-protected)
+    projects_resp = unauthenticated_client.get("/projects")
+    from tests.integration.test_csrf import extract_csrf_token
+
+    logout_csrf_token = extract_csrf_token(projects_resp.text)
+    logout_resp = unauthenticated_client.post(
+        "/logout",
+        data={"csrf_token": logout_csrf_token},
+        headers={"X-Test-Enforce-CSRF": "true"},
+        follow_redirects=False,
+    )
     assert logout_resp.status_code == 303
     assert logout_resp.headers["location"] == "/login"
 
@@ -190,6 +200,57 @@ def test_invalid_deleted_user_fails_closed(unauthenticated_client, db):
         assert response.headers["location"] == "/login"
     finally:
         settings.AUTH_MODE = original_mode
+
+
+def test_email_only_login_fails_in_session_mode(
+    unauthenticated_client, db, monkeypatch
+):
+    """Regression: submitting only a valid active user's email under
+    AUTH_MODE=session must not create an authenticated session, must not grant
+    access to /projects, and must not leave user_id/org_id in the session."""
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "AUTH_MODE", "session")
+
+    org = Organization(name="Regression Org")
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    user = User(
+        organization_id=org.id,
+        email="regression-user@rfparchitect.com",
+        hashed_password="not-a-real-password-hash",
+        full_name="Regression User",
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+
+    get_resp = unauthenticated_client.get("/login")
+    from tests.integration.test_csrf import extract_csrf_token
+
+    csrf_token = extract_csrf_token(get_resp.text)
+
+    login_resp = unauthenticated_client.post(
+        "/login",
+        data={
+            "email": "regression-user@rfparchitect.com",
+            "csrf_token": csrf_token,
+        },
+        headers={"X-Test-Enforce-CSRF": "true"},
+        follow_redirects=False,
+    )
+
+    # Must not redirect to /projects (i.e. must not authenticate).
+    assert login_resp.headers.get("location") != "/projects"
+
+    # Must not have gained access to /projects.
+    projects_resp = unauthenticated_client.get(
+        "/projects", headers={"accept": "text/html"}, follow_redirects=False
+    )
+    assert projects_resp.status_code == 303
+    assert projects_resp.headers["location"] == "/login"
 
 
 def test_auth_fixture_does_not_depend_on_local_env(client):

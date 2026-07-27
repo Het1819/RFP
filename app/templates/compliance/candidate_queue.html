@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RFP Architect — Requirement Candidate Review</title>
+    {#
+      No <img>, <iframe>, <object>, <embed>, or link preview is rendered from
+      candidate or evidence content anywhere on this page. Evidence is quoted
+      from an untrusted uploaded document: a URL inside it must stay inert
+      text, never a resource the browser fetches. Jinja autoescaping turns any
+      markup in that text into visible characters.
+
+      referrer/nofollow/noopener are belt-and-braces for the static
+      application links below; there are no document-derived links at all.
+    #}
+    <meta name="referrer" content="no-referrer">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <link rel="stylesheet" href="/static/dist/app.css">
+</head>
+<body>
+    <div class="glass-bg"></div>
+
+    <div class="app-shell">
+        <aside class="sidebar">
+            <a href="/" class="sidebar-logo">
+                <span class="logo-icon" style="font-size: 1.35rem;">📐</span>
+                <span class="logo-text" style="font-size: 1.2rem; font-weight: 700; color: var(--text-primary);">RFP Architect</span>
+            </a>
+            <ul class="sidebar-menu">
+                <li>
+                    <a href="/projects" class="sidebar-link">
+                        <span style="font-size: 1.1rem;">📊</span><span>Projects</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="/compliance/requirement-candidates" class="sidebar-link active">
+                        <span style="font-size: 1.1rem;">🧾</span><span>Candidate Review</span>
+                    </a>
+                </li>
+                <li>
+                    <form action="/logout" method="POST" style="margin: 0;">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+                        <button type="submit" class="sidebar-link" style="width: 100%; background: none; border: none; text-align: left; cursor: pointer; font: inherit;">
+                            <span style="font-size: 1.1rem;">🚪</span><span>Sign Out</span>
+                        </button>
+                    </form>
+                </li>
+            </ul>
+        </aside>
+
+        <div class="main-content">
+            <header class="top-bar">
+                <div class="top-bar-left">
+                    <div style="display: flex; flex-direction: column;">
+                        <span class="workspace-context">Human Review • {{ reviewer_name }}</span>
+                        <span class="workspace-title">Requirement Candidates</span>
+                    </div>
+                </div>
+            </header>
+
+            <main class="dashboard-container">
+                {% if notice == 'review_recorded' %}
+                <div style="background: var(--surface-primary); border: 1px solid var(--border-color); padding: var(--space-md) var(--space-lg); border-radius: var(--radius-md); margin-bottom: var(--space-lg);">
+                    <span>✅</span> <span>Review recorded.</span>
+                </div>
+                {% endif %}
+
+                <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: var(--space-md); gap: var(--space-md); flex-wrap: wrap;">
+                    <div>
+                        <h1 style="font-size: 1.5rem; font-weight: 800; color: var(--text-primary);">Awaiting review</h1>
+                        <p style="color: var(--text-secondary); font-size: 0.9rem;">
+                            Machine-proposed requirements. Nothing here is part of the compliance
+                            matrix until you approve it.
+                        </p>
+                    </div>
+
+                    <form method="GET" action="/compliance/requirement-candidates" style="display: flex; gap: var(--space-xs); align-items: center;">
+                        <label for="project-filter" style="font-size: 0.85rem; color: var(--text-secondary);">Project</label>
+                        <select id="project-filter" name="project_id" class="form-input" style="padding: 0.4rem 0.6rem; font-size: 0.85rem;">
+                            <option value="">All projects</option>
+                            {% for pid, pname in projects %}
+                            <option value="{{ pid }}" {% if selected_project_id == pid|string %}selected{% endif %}>{{ pname }}</option>
+                            {% endfor %}
+                        </select>
+                        <button type="submit" class="btn btn-secondary" style="padding: 0.4rem 0.9rem; font-size: 0.85rem;">Filter</button>
+                    </form>
+                </div>
+
+                {% if not items %}
+                <div class="empty-state" style="background: var(--surface-primary); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: 5rem var(--space-lg); text-align: center;">
+                    <div style="font-size: 3rem; margin-bottom: var(--space-sm);">🧾</div>
+                    <h2 style="font-size: 1.1rem; font-weight: 700;">Nothing awaiting review</h2>
+                    <p style="color: var(--text-secondary); font-size: 0.9rem;">
+                        Candidates appear here after a document finishes extraction.
+                    </p>
+                </div>
+                {% else %}
+                <div style="display: flex; flex-direction: column; gap: var(--space-md);">
+                    {% for item in items %}
+                    <article style="background: var(--surface-primary); border: 1px solid var(--border-color); border-radius: var(--radius-lg); padding: var(--space-lg);">
+                        <div style="display: flex; justify-content: space-between; gap: var(--space-md); flex-wrap: wrap; margin-bottom: var(--space-sm);">
+                            <span class="badge" style="font-size: 0.75rem;">{{ item.project_name }}</span>
+                            <span style="font-size: 0.8rem; color: var(--text-muted);">
+                                {{ item.unit_kind }} • {{ item.source_locator }}
+                                {% if item.requirement_type %} • {{ item.requirement_type }}{% endif %}
+                                {% if item.confidence is not none %} • confidence {{ '%.2f'|format(item.confidence) }}{% endif %}
+                                • {{ item.created_at.strftime('%Y-%m-%d %H:%M') }}
+                            </span>
+                        </div>
+
+                        {# Autoescaped: markup in model output renders as text. #}
+                        <p style="font-weight: 600; color: var(--text-primary); margin-bottom: var(--space-xs);">{{ item.requirement_text }}</p>
+
+                        <p style="font-size: 0.85rem; color: var(--text-secondary); white-space: pre-wrap; border-left: 3px solid var(--border-color); padding-left: var(--space-sm); margin-bottom: var(--space-md);">{{ item.evidence_excerpt }}</p>
+
+                        <a href="/compliance/requirement-candidates/{{ item.candidate_id }}" class="btn btn-primary" style="padding: 0.45rem 1rem; font-size: 0.85rem; text-decoration: none;">Review</a>
+                    </article>
+                    {% endfor %}
+                </div>
+
+                <nav style="display: flex; gap: var(--space-sm); margin-top: var(--space-lg); align-items: center;">
+                    {% set filter_suffix = '&project_id=' ~ selected_project_id if selected_project_id else '' %}
+                    {% if has_prev %}
+                    <a class="btn btn-secondary" style="padding: 0.4rem 0.9rem; font-size: 0.85rem; text-decoration: none;" href="/compliance/requirement-candidates?page={{ page - 1 }}{{ filter_suffix }}">&larr; Previous</a>
+                    {% endif %}
+                    <span style="font-size: 0.85rem; color: var(--text-muted);">Page {{ page }}</span>
+                    {% if has_next %}
+                    <a class="btn btn-secondary" style="padding: 0.4rem 0.9rem; font-size: 0.85rem; text-decoration: none;" href="/compliance/requirement-candidates?page={{ page + 1 }}{{ filter_suffix }}">Next &rarr;</a>
+                    {% endif %}
+                </nav>
+                {% endif %}
+            </main>
+        </div>
+    </div>
+</body>
+</html>

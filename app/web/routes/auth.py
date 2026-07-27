@@ -1,21 +1,59 @@
 import logging
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.client_ip import resolve_client_ip
 from app.core.config import settings
-from app.core.csrf import validate_csrf_token
+from app.core.csrf import generate_csrf_token, validate_csrf_token
 from app.core.database import get_db
+from app.core.observability import MetricsRegistry
+from app.core.passwords import verify_password
+from app.core.sessions.throttling import (
+    LoginThrottle,
+    ThrottleStore,
+    ThrottleStoreUnavailableError,
+    normalize_email,
+)
 from app.core.templates import templates
 from app.models.organization import Organization
 from app.models.user import User
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["auth"])
+
+
+def _record_throttle_decision(decision: str) -> None:
+    MetricsRegistry.login_throttle_decisions[decision] = (
+        MetricsRegistry.login_throttle_decisions.get(decision, 0) + 1
+    )
+
+
+def _build_login_throttle(request: Request) -> LoginThrottle:
+    store = cast(ThrottleStore, request.app.state.throttle_store)
+    return LoginThrottle(
+        store,
+        settings.effective_login_throttle_secret,
+        account_ip_max=settings.LOGIN_THROTTLE_ACCOUNT_IP_MAX,
+        account_ip_window_seconds=settings.LOGIN_THROTTLE_ACCOUNT_IP_WINDOW_SECONDS,
+        ip_max=settings.LOGIN_THROTTLE_IP_MAX,
+        ip_window_seconds=settings.LOGIN_THROTTLE_IP_WINDOW_SECONDS,
+        account_max=settings.LOGIN_THROTTLE_ACCOUNT_MAX,
+        account_window_seconds=settings.LOGIN_THROTTLE_ACCOUNT_WINDOW_SECONDS,
+        max_cooldown_seconds=settings.LOGIN_THROTTLE_MAX_COOLDOWN_SECONDS,
+    )
+
+
+def _source_ip(request: Request) -> str:
+    # Centralized trusted-proxy-aware resolution (app.core.client_ip):
+    # forwarded headers are honored only when the direct ASGI peer is the
+    # exact configured Nginx backend IP; otherwise the direct peer address
+    # is used and forwarded headers are ignored entirely.
+    return resolve_client_ip(request, settings.effective_trusted_proxy_ips)
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -36,9 +74,10 @@ def login_view(request: Request) -> Any:
     response_class=RedirectResponse,
     dependencies=[Depends(validate_csrf_token)],
 )
-def login_action(
+async def login_action(
     request: Request,
     email: str = Form(None),
+    password: str = Form(None),
     db: Session = Depends(get_db),
 ) -> Any:
     if settings.AUTH_MODE == "dev":
@@ -93,16 +132,66 @@ def login_action(
         return RedirectResponse(url="/projects", status_code=303)
 
     elif settings.AUTH_MODE == "session":
-        if not email:
-            return RedirectResponse(
-                url="/login?error=Email is required", status_code=303
-            )
+        generic_failure = RedirectResponse(
+            url="/login?error=Invalid email or password",
+            status_code=303,
+        )
 
-        user = db.scalars(select(User).where(User.email == email)).first()
+        if not email or not password:
+            return generic_failure
+
+        normalized_email = normalize_email(email)
+        source_ip = _source_ip(request)
+        throttle = _build_login_throttle(request)
+
+        try:
+            decision = await throttle.check(
+                normalized_email=normalized_email, source_ip=source_ip
+            )
+        except ThrottleStoreUnavailableError:
+            _record_throttle_decision("store_unavailable")
+            raise HTTPException(
+                status_code=503, detail="Service temporarily unavailable"
+            ) from None
+
+        if not decision.allowed:
+            _record_throttle_decision("blocked")
+            # Minimum safe timing-equalization: still run a password
+            # verification (against the dummy hash) so a throttled response
+            # doesn't time out faster than a normal failure would, without
+            # touching the database.
+            verify_password(password, None)
+            throttled_response = RedirectResponse(
+                url="/login?error=Invalid email or password", status_code=303
+            )
+            throttled_response.headers["Retry-After"] = str(
+                decision.retry_after_seconds
+            )
+            return throttled_response
+
+        normalized_email_lower = normalized_email
+        user = db.scalars(
+            select(User).where(func.lower(User.email) == normalized_email_lower)
+        ).first()
+
+        stored_hash = (
+            user.hashed_password if user is not None and user.is_active else None
+        )
+        # Always perform password verification work, even for unknown/inactive
+        # users, so response timing does not reveal account existence.
+        password_ok = verify_password(password, stored_hash)
+
         from app.services.project_service import log_audit_event
 
-        if not user or not user.is_active:
-            if user:
+        if user is None or not user.is_active or not password_ok:
+            try:
+                await throttle.record_failure(
+                    normalized_email=normalized_email, source_ip=source_ip
+                )
+            except ThrottleStoreUnavailableError:
+                pass
+            _record_throttle_decision("failure_recorded")
+            if user is not None:
                 log_audit_event(
                     db,
                     org_id=user.organization_id,
@@ -110,13 +199,22 @@ def login_action(
                     action="USER_LOGIN_FAILURE",
                     entity_type="User",
                     entity_id=user.id,
-                    details={"reason": "inactive"},
+                    details={"reason": "invalid_credentials"},
                 )
-            return RedirectResponse(
-                url="/login?error=Invalid email or account deactivated",
-                status_code=303,
-            )
+            return generic_failure
 
+        try:
+            await throttle.record_success(
+                normalized_email=normalized_email, source_ip=source_ip
+            )
+        except ThrottleStoreUnavailableError:
+            pass
+        _record_throttle_decision("allowed")
+
+        # Clear any pre-authentication session data, then establish fresh
+        # session/CSRF state before setting authenticated values.
+        request.session.clear()
+        generate_csrf_token(request)
         request.session["user_id"] = str(user.id)
         request.session["org_id"] = str(user.organization_id)
         log_audit_event(
@@ -140,8 +238,11 @@ def login_action(
     return RedirectResponse(url="/login", status_code=303)
 
 
-@router.get("/logout", response_class=RedirectResponse)
-@router.post("/logout", response_class=RedirectResponse)
+@router.post(
+    "/logout",
+    response_class=RedirectResponse,
+    dependencies=[Depends(validate_csrf_token)],
+)
 def logout_action(request: Request) -> Any:
     user_id_str = request.session.get("user_id")
     org_id_str = request.session.get("org_id")

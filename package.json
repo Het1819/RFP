@@ -25,7 +25,8 @@
   },
   "homepage": "https://github.com/Het1819/RFP#readme",
   "dependencies": {
-    "gsap": "^3.15.0"
+    "gsap": "^3.15.0",
+    "htmx.org": "1.9.10"
   },
   "devDependencies": {
     "typescript": "^6.0.3",

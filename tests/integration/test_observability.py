@@ -164,8 +164,16 @@ def test_audit_logs_login_logout(client, db):
     ).all()
     assert len(login_events) > 0
 
-    # Perform logout to trigger logout audit log
-    client.get("/logout")
+    # Perform logout to trigger logout audit log (POST-only, CSRF-protected)
+    from tests.integration.test_csrf import extract_csrf_token
+
+    projects_resp = client.get("/projects")
+    logout_csrf_token = extract_csrf_token(projects_resp.text)
+    client.post(
+        "/logout",
+        data={"csrf_token": logout_csrf_token},
+        headers={"X-Test-Enforce-CSRF": "true"},
+    )
 
     logout_events = db.scalars(
         select(AuditEvent).where(

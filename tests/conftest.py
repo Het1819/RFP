@@ -30,11 +30,15 @@ state. The fixture requires AUTH_MODE=dev (set in CI env and local .env).
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
+from sqlalchemy import event as sa_event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.sessions.clock import SystemClock
+from app.core.sessions.store import InMemorySessionStore
+from app.core.sessions.throttling import InMemoryThrottleStore
 from app.main import app
 from app.models.base import Base
 
@@ -55,6 +59,23 @@ if _IS_SQLITE:
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
+
+    # pysqlite's DBAPI driver does its own implicit BEGIN/COMMIT handling
+    # ("transactional" mode) that fights with SQLAlchemy's SAVEPOINT-based
+    # test-isolation pattern used by the `db` fixture below (a real outer
+    # transaction plus a SAVEPOINT per `join_transaction_mode="create_savepoint"`).
+    # Without this documented workaround, pysqlite silently auto-commits/
+    # auto-begins around SAVEPOINT boundaries, which breaks nested-rollback
+    # semantics: internal `session.commit()` calls end up committing the
+    # *outer* transaction for real, and rows leak across tests. See:
+    # https://docs.sqlalchemy.org/en/20/dialects/sqlite.html#serializable-isolation-savepoints-transactional-ddl
+    @sa_event.listens_for(test_engine, "connect")
+    def _sqlite_disable_pysqlite_transaction_control(dbapi_connection, _record):
+        dbapi_connection.isolation_level = None
+
+    @sa_event.listens_for(test_engine, "begin")
+    def _sqlite_emit_real_begin(conn):
+        conn.exec_driver_sql("BEGIN")
 else:
     test_engine = create_engine(settings.DATABASE_URL)
 
@@ -87,19 +108,71 @@ def setup_db_tables():
 def db():
     """Provides a transactional database session rolled back after each test.
 
-    Using a savepoint (nested transaction) rather than a raw rollback so that
-    tests can call `db.commit()` internally without destroying the outer
-    rollback boundary.
+    Uses SQLAlchemy 2.0's built-in external-transaction join mode
+    (`join_transaction_mode="create_savepoint"`): the connection opens one
+    real outer transaction, and the Session binds to it in savepoint mode.
+    Each `session.commit()` releases a SAVEPOINT (and SQLAlchemy
+    transparently opens a fresh one for the next unit of work) rather than
+    committing the outer transaction, so app code (route handlers, service
+    functions like `transition()`) can call commit() any number of times
+    within one test and every "commit" still nests inside the outer
+    transaction. `session.rollback()` similarly only rolls back to the
+    SAVEPOINT. The outer transaction is untouched by any of this and is
+    unconditionally rolled back at teardown, discarding everything -
+    including changes that were "committed" at the Session level - in one
+    step.
+
+    This replaces the older SQLAlchemy 1.x recipe (manual `begin_nested()` +
+    an `after_transaction_end` event listener that restarts the savepoint);
+    per SQLAlchemy 2.0 docs, "event handlers to 'reset' the nested
+    transaction are no longer required" once `join_transaction_mode` is used.
     """
     connection = test_engine.connect()
-    transaction = connection.begin()
-    session = TestingSessionLocal(bind=connection)
+    outer_transaction = connection.begin()
+    session = TestingSessionLocal(
+        bind=connection, join_transaction_mode="create_savepoint"
+    )
 
     yield session
 
     session.close()
-    transaction.rollback()
+    outer_transaction.rollback()
     connection.close()
+
+
+# ---------------------------------------------------------------------------
+# Default org/project/user fixture — shared setup for tests exercising
+# project- and document-scoped flows (ingestion, evidence, drafting, ...).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def org_project_user(db):
+    """Creates (or reuses) the default org/user and a fresh test project.
+
+    Mirrors the pattern used in tests/integration/test_projects.py:
+    `get_default_org_and_user(db)` for the org/user, plus a manually
+    constructed `ProposalProject`. Returns the actual ORM objects (not just
+    ids) since callers commonly need `.id` off all three.
+    """
+    from app.core.database import get_default_org_and_user
+    from app.models.organization import Organization
+    from app.models.project import ProposalProject
+    from app.models.user import User
+
+    org_id, user_id = get_default_org_and_user(db)
+    org = db.get(Organization, org_id)
+    user = db.get(User, user_id)
+    project = ProposalProject(
+        organization_id=org.id,
+        name="Test Project",
+        client_name="Test Client",
+        created_by_id=user.id,
+    )
+    db.add(project)
+    db.commit()
+    db.refresh(project)
+    return org, project, user
 
 
 # ---------------------------------------------------------------------------
@@ -138,12 +211,42 @@ def mock_session_local(monkeypatch, db):
 
 
 # ---------------------------------------------------------------------------
+# Session store isolation — fresh in-memory store/clock per test
+# ---------------------------------------------------------------------------
+# The app wires a RedisSessionStore into app.state.session_store at import
+# time for production. Tests substitute a fresh InMemorySessionStore (same
+# typed interface, see app.core.sessions.store) so the full test suite never
+# needs a real Redis instance, and so no state leaks between tests. Tests
+# that need to control time (idle/absolute expiry) replace
+# app.state.session_clock with a FakeClock themselves.
+
+
+@pytest.fixture
+def session_store():
+    """Fresh in-memory session store + throttle store, isolated per test."""
+    original_store = getattr(app.state, "session_store", None)
+    original_clock = getattr(app.state, "session_clock", None)
+    original_throttle_store = getattr(app.state, "throttle_store", None)
+    store = InMemorySessionStore()
+    app.state.session_store = store
+    app.state.session_clock = SystemClock()
+    app.state.throttle_store = InMemoryThrottleStore()
+    yield store
+    if original_store is not None:
+        app.state.session_store = original_store
+    if original_clock is not None:
+        app.state.session_clock = original_clock
+    if original_throttle_store is not None:
+        app.state.throttle_store = original_throttle_store
+
+
+# ---------------------------------------------------------------------------
 # Unauthenticated HTTP client — no session, no login
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def unauthenticated_client(db):
+def unauthenticated_client(db, session_store):
     """Bare TestClient with no session injection.
 
     Use for tests that explicitly verify unauthenticated behavior:
@@ -174,7 +277,7 @@ _TEST_AUTH_EMAIL = "ci-fixture@rfparchitect.com"
 
 
 @pytest.fixture
-def client(db):
+def client(db, session_store):
     """Authenticated TestClient.
 
     Authenticates by hitting the real /login route in AUTH_MODE=dev using a

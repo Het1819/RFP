@@ -25,6 +25,9 @@ tests
 !.env.example
 !.env.staging.example
 
+# Local Compose secrets: never baked into an image layer
+secrets/
+
 # Antigravity artifacts
 Antigravity*.txt
 Antigravity Continue.txt

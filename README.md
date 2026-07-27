@@ -85,6 +85,156 @@ Alternatively, run tasks individually:
   make typecheck
   ```
 
+## Authentication
+
+The `AUTH_MODE` environment variable controls how users authenticate:
+
+- **`dev`** — local/CI convenience mode. Any submitted email is accepted; the
+  user (and a default organization) is created automatically if it does not
+  exist. `AUTH_MODE=dev` is refused at startup outside `development`,
+  `local`, or `test` environments.
+- **`session`** — password-based login. Users must submit both a registered
+  email and their password. Passwords are hashed with Argon2 (via `pwdlib`)
+  and verified against the stored hash; unknown emails, inactive accounts,
+  wrong passwords, and malformed stored hashes all fail with the same
+  generic `Invalid email or password` message, so failures do not reveal
+  account existence.
+- **`oidc`** — not implemented in this MVP; the login route returns `501`.
+
+### Provisioning a password for an existing user
+
+Users are created via the application (dev mode) or a future admin flow, but
+passwords must be set explicitly for `AUTH_MODE=session` login to work. Use
+the operator script, which prompts for the password interactively and never
+accepts it as a command-line argument:
+
+```bash
+uv run python scripts/set_user_password.py <user-email>
+```
+
+You will be prompted for the new password (typed input is hidden) and asked
+to confirm it. Passwords must be at least 15 characters. The script updates
+only an existing, unambiguous user by email — it never creates users.
+
+### Logging out
+
+Logout is a `POST /logout` request protected by the same CSRF token used
+elsewhere in the app (submitted via a form, not a link). A `GET /logout`
+request will not log the user out.
+
+## Sessions, Expiration, and Revocation (Phase A2)
+
+`AUTH_MODE=session` now uses **server-side, Redis-backed sessions** instead
+of the Phase A1 client-side signed cookie.
+
+### Architecture
+
+- The browser cookie (`rfp_session` in dev/test) holds **only** a random,
+  opaque session id — `secrets.token_urlsafe(32)` (256 bits), URL-safe. It
+  is validated for charset/length before any Redis lookup is attempted.
+  Cookie attributes: `HttpOnly`, `SameSite=Lax`, `Secure` outside
+  dev/local/test, `Path=/`, no `Domain`, no `Max-Age`/`Expires` (cleared on
+  browser close). A `__Host-` prefixed cookie name is supported via
+  `SESSION_COOKIE_NAME` but not enabled by default in this phase.
+- All session state — `user_id`, `org_id`, `csrf_token`, `created_at`,
+  `last_activity_at`, `authenticated_at`, a schema version — lives
+  server-side in Redis under `rfp:session:<session-id>`, as strictly
+  validated JSON (never pickle). Malformed, oversized, or
+  version-mismatched records are rejected and deleted.
+- A per-user index at `rfp:user_sessions:<user-id>` (a Redis set) tracks
+  every session belonging to a user, enabling immediate revocation.
+- Login flow: visiting `/login` creates an **anonymous** server-side
+  session holding only a CSRF token. On successful password verification,
+  the anonymous session is deleted, a brand-new session id is generated,
+  and the authenticated record (with `user_id`/`org_id`/`authenticated_at`)
+  is stored under the new id. The pre-authentication id is never valid
+  again.
+- Implementation: `app/core/sessions/` (`models.py` for the validated
+  record type, `store.py` for the `SessionStore` interface plus
+  `RedisSessionStore`/`InMemorySessionStore`, `middleware.py` for
+  `ServerSessionMiddleware`, `throttling.py` for login throttling).
+
+### Idle and absolute expiration
+
+- `SESSION_IDLE_TIMEOUT_SECONDS` (default 900 / 15 min): a session with no
+  qualifying activity for this long is expired.
+- `SESSION_ABSOLUTE_TIMEOUT_SECONDS` (default 28800 / 8 hours): a session
+  is expired this long after it was created (or authenticated, for a
+  logged-in session), regardless of activity.
+- **Activity** is any request through a path other than `/static/*`,
+  `/healthz`, `/health`, `/readyz`, `/metrics` — those never touch the
+  session store, so they can neither refresh nor expire a session.
+  Qualifying activity resets only `last_activity_at`; it never moves the
+  absolute-expiry anchor.
+- The Redis TTL on a session record is always `min(remaining idle,
+  remaining absolute)` — but expiry is also checked explicitly against the
+  stored timestamps on every request, not derived from TTL alone.
+- Both timeouts are validated at startup: positive, and idle strictly
+  shorter than absolute, in every environment.
+
+### Logout and revocation
+
+- `POST /logout` (CSRF-protected, as in A1) deletes the Redis record,
+  removes it from the user's session index, and expires the cookie. It is
+  idempotent — logging out twice, or with no active session, is safe.
+- A cookie copied before logout stops working immediately after logout,
+  because the server-side record it points to is gone.
+- **Administrative revocation** — revoke every session for one account
+  (e.g. suspected compromise, offboarding):
+  ```bash
+  uv run python scripts/revoke_user_sessions.py user@example.com
+  uv run python scripts/revoke_user_sessions.py user@example.com --yes
+  ```
+  Looks the user up by case-insensitive exact email match (never creates
+  users), shows the account and session count, requires interactive
+  confirmation unless `--yes` is passed, and never prints raw session ids.
+
+### Login throttling
+
+`AUTH_MODE=session` enforces three independent, atomically-updated Redis
+counters (no permanent lockout):
+
+| Limit | Default |
+|---|---|
+| account + source IP | 5 failures / 15 min |
+| source IP | 25 failures / 15 min |
+| account across IPs | 20 failures / hour |
+| max cooldown communicated to client | 5 min (`Retry-After`) |
+
+The account component of every throttle key is an HMAC-SHA256 of the
+normalized email (`LOGIN_THROTTLE_SECRET`) — the raw email is never stored
+in a throttle key. Source IP is the direct ASGI peer address only;
+`X-Forwarded-For` / `X-Real-IP` / `Forwarded` are **not** trusted in this
+phase (that requires an explicit trusted-proxy list, planned for the
+reverse-proxy hardening phase). A throttled response looks identical
+regardless of which limit tripped or whether the account exists, and a
+correct password cannot bypass an active throttle. A successful login
+clears the account and account+IP counters but deliberately leaves an
+abusive IP's wider history alone.
+
+### Fail-closed behavior
+
+If Redis is unreachable, the app **never** falls back to trusting the
+browser. Any request other than `/healthz` returns `503` when the session
+store can't be reached. `/healthz` stays up without Redis (pure liveness).
+`/readyz` actively performs a save/get/delete round-trip against the
+session store and reports `503` if it fails, independent of database
+health.
+
+### Remaining limitations (still not production-ready)
+
+- production Compose credentials and fake-LLM configuration are unresolved;
+- TLS termination and reverse-proxy hardening (including trusted-proxy-aware
+  `X-Forwarded-For` handling for throttling) are not implemented;
+- no multi-factor authentication (MFA) or enterprise OIDC/SSO;
+- no isolation guarantees against hostile uploaded documents beyond basic
+  validation;
+- no evidence-backed customer-facing security documentation;
+- password reset / self-service account recovery is not implemented;
+- Redis data is **not** encrypted at rest or guaranteed encrypted in
+  transit — do not assume TLS to Redis unless you have configured and
+  verified it yourself.
+
 ## RFP Upload Workflow (Slice 2)
 
 ### 1. Launch dev server

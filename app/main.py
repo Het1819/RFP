@@ -10,14 +10,19 @@ from sqlalchemy.orm import Session
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import settings
-from app.core.csrf import SimpleSessionMiddleware
 from app.core.database import get_db
+from app.core.host_validation import HostValidationMiddleware
 from app.core.observability import (
     SAFE_ID_REGEX,
     MetricsRegistry,
     request_id_var,
     setup_logging,
 )
+from app.core.readiness import check_clamav_connectivity, check_quarantine_storage
+from app.core.sessions.clock import SystemClock
+from app.core.sessions.middleware import ServerSessionMiddleware
+from app.core.sessions.store import RedisSessionStore, SessionStoreUnavailableError
+from app.core.sessions.throttling import RedisThrottleStore
 from app.core.templates import templates
 from app.web.routes.auth import router as auth_router
 from app.web.routes.compliance import router as compliance_router
@@ -77,14 +82,28 @@ class CorrelationIdAndMetricsMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(CorrelationIdAndMetricsMiddleware)
 
-# Add session middleware for CSRF token storage
+# Server-side session store (Phase A2). The default store/clock live on
+# app.state so tests can substitute an in-memory store/fake clock per test
+# without reconstructing the middleware; production always resolves to this
+# Redis-backed default.
+app.state.session_store = RedisSessionStore(settings.effective_session_redis_url)
+app.state.session_clock = SystemClock()
+app.state.throttle_store = RedisThrottleStore(settings.effective_session_redis_url)
+
 app.add_middleware(
-    SimpleSessionMiddleware,
-    secret_key=cast(str, settings.SESSION_SECRET_KEY),
-    cookie_name="rfp_session",
-    same_site="lax",
+    ServerSessionMiddleware,
+    default_store=app.state.session_store,
+    cookie_name=settings.SESSION_COOKIE_NAME,
+    idle_timeout_seconds=settings.SESSION_IDLE_TIMEOUT_SECONDS,
+    absolute_timeout_seconds=settings.SESSION_ABSOLUTE_TIMEOUT_SECONDS,
     https_only=settings.APP_ENV not in ("development", "local", "test"),
 )
+
+# Added last so it becomes the OUTERMOST middleware (Starlette runs the
+# most-recently-added middleware first) -- an invalid Host is rejected
+# before the session middleware ever touches Redis, and before any route
+# or auth dependency runs. No-op when ALLOWED_HOSTS is unset (dev/test).
+app.add_middleware(HostValidationMiddleware, allowed_hosts=settings.allowed_hosts_list)
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -128,17 +147,53 @@ def health_check() -> dict[str, str]:
 
 
 @app.get("/readyz")
-def readiness_check(db: Session = Depends(get_db)) -> dict[str, str]:
+async def readiness_check(
+    request: Request, db: Session = Depends(get_db)
+) -> dict[str, str]:
+    import logging
+
     try:
         from sqlalchemy import text
 
         db.execute(text("SELECT 1"))
-        return {"status": "ready"}
     except Exception as e:
-        import logging
-
         logging.getLogger(__name__).error(f"Readiness check failed: {e}")
         raise HTTPException(status_code=503, detail="Database not ready") from e
+
+    # Verify the session store: connectivity plus a minimal read/write/
+    # delete round-trip, not just a ping. A required dependency being down
+    # must make the app not-ready even if the database is healthy.
+    store = getattr(request.app.state, "session_store", None)
+    if store is not None:
+        try:
+            from app.core.sessions.models import SessionRecord
+
+            probe_id = f"readyz-probe-{uuid.uuid4()}"
+            probe_record = SessionRecord(created_at=0.0, last_activity_at=0.0)
+            await store.save(probe_id, probe_record, ttl_seconds=5)
+            await store.get(probe_id)
+            await store.delete(probe_id)
+        except SessionStoreUnavailableError as e:
+            logging.getLogger(__name__).error(f"Readiness check failed: {e}")
+            raise HTTPException(
+                status_code=503, detail="Session store not ready"
+            ) from e
+
+    quarantine_result = check_quarantine_storage()
+    if not quarantine_result.healthy:
+        logging.getLogger(__name__).error(
+            f"Readiness check failed: {quarantine_result.detail}"
+        )
+        raise HTTPException(status_code=503, detail="Quarantine storage not ready")
+
+    scanner_result = check_clamav_connectivity()
+    if not scanner_result.healthy:
+        logging.getLogger(__name__).error(
+            f"Readiness check failed: {scanner_result.detail}"
+        )
+        raise HTTPException(status_code=503, detail="Scanner not ready")
+
+    return {"status": "ready"}
 
 
 @app.get("/", response_class=HTMLResponse)
