@@ -203,6 +203,44 @@ class Settings(BaseSettings):
     ENABLE_LLM_TELEMETRY: bool = True
     ENABLE_LLM_DEBUG_PAYLOAD_LOGGING: bool = False
 
+    # --- Requirement candidate extraction (A5f Pass 2B1) ---
+    # Provider selection is a deployment decision, never a request parameter:
+    # nothing reachable from HTTP may choose the provider, the model, or the
+    # prompt. "disabled" is the default so a deployment that has not made an
+    # explicit choice extracts nothing rather than silently calling a model.
+    REQUIREMENT_EXTRACTOR_PROVIDER: str = "disabled"
+    # Model, prompt version, and schema version come from trusted settings.
+    REQUIREMENT_EXTRACTOR_MODEL: str = "claude-opus-5"
+    # `temperature`/`top_p`/`top_k` are rejected by current Claude models, so
+    # none are sent. Effort is NOT a replacement for them: it is a bounded
+    # cost and latency control, not a determinism control. Response shape is
+    # constrained by strict structured output, and provenance is enforced by
+    # the downstream span/evidence/hash checks -- not by this setting.
+    REQUIREMENT_EXTRACTOR_EFFORT: str = "low"
+
+    # Hard input bounds. A document over either limit fails closed rather than
+    # being silently truncated -- a truncated extraction looks successful while
+    # silently dropping requirements, which is the worst outcome for a
+    # compliance matrix.
+    REQUIREMENT_EXTRACTION_MAX_SOURCE_UNITS: int = 200
+    REQUIREMENT_EXTRACTION_MAX_INPUT_CHARS: int = 400_000
+
+    # Hard output bounds.
+    REQUIREMENT_EXTRACTION_MAX_OUTPUT_TOKENS: int = 8192
+    REQUIREMENT_EXTRACTION_MAX_CANDIDATES: int = 500
+    # One provider call per run in this pass; multi-batch extraction is
+    # deliberately deferred until the single-call path has been measured.
+    REQUIREMENT_EXTRACTION_MAX_PROVIDER_CALLS: int = 1
+
+    REQUIREMENT_EXTRACTION_CONNECT_TIMEOUT_SECONDS: float = 10.0
+    REQUIREMENT_EXTRACTION_TIMEOUT_SECONDS: float = 120.0
+    REQUIREMENT_EXTRACTION_MAX_RETRIES: int = 2
+    REQUIREMENT_EXTRACTION_RETRY_BASE_SECONDS: float = 1.0
+    REQUIREMENT_EXTRACTION_RETRY_MAX_SECONDS: float = 20.0
+    # Caches only the stable trusted prefix (policy + schema), never tenant
+    # source content.
+    REQUIREMENT_EXTRACTION_PROMPT_CACHE_ENABLED: bool = True
+
     # --- Server-side session store (Phase A2) ---
     # Falls back to REDIS_URL when unset; see `effective_session_redis_url`.
     SESSION_REDIS_URL: str | None = None
@@ -336,6 +374,64 @@ class Settings(BaseSettings):
         # be dead configuration masking a real bug.
         if self.CLAMAV_STREAM_MAX_BYTES > self.MAX_UPLOAD_SIZE:
             raise ValueError("CLAMAV_STREAM_MAX_BYTES must not exceed MAX_UPLOAD_SIZE")
+        return self
+
+    @model_validator(mode="after")
+    def validate_requirement_extractor_config(self) -> "Settings":
+        """Fail closed on an unusable or unsafe extractor configuration.
+
+        Validated at startup rather than at first extraction so a
+        misconfigured deployment is caught before a document reaches the
+        worker, and never falls back from one provider to another.
+        """
+        provider = self.REQUIREMENT_EXTRACTOR_PROVIDER
+        if provider not in ("disabled", "fixture", "anthropic"):
+            raise ValueError(
+                "REQUIREMENT_EXTRACTOR_PROVIDER must be one of "
+                "'disabled', 'fixture', 'anthropic'"
+            )
+
+        if provider == "fixture" and self.APP_ENV not in (
+            "development",
+            "local",
+            "test",
+        ):
+            raise ValueError(
+                "REQUIREMENT_EXTRACTOR_PROVIDER='fixture' is only permitted in "
+                "development, local, or test environments"
+            )
+
+        if provider == "anthropic":
+            # The key is required only when the provider is explicitly enabled,
+            # so a deployment that never turns extraction on never needs one.
+            if not self.ANTHROPIC_API_KEY or self.ANTHROPIC_API_KEY == _PLACEHOLDER:
+                raise ValueError(
+                    "ANTHROPIC_API_KEY (or ANTHROPIC_API_KEY_FILE) must be set "
+                    "when REQUIREMENT_EXTRACTOR_PROVIDER='anthropic'"
+                )
+            if not self.REQUIREMENT_EXTRACTOR_MODEL.strip():
+                raise ValueError(
+                    "REQUIREMENT_EXTRACTOR_MODEL must be set when "
+                    "REQUIREMENT_EXTRACTOR_PROVIDER='anthropic'"
+                )
+
+        if self.REQUIREMENT_EXTRACTOR_EFFORT not in (
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+        ):
+            raise ValueError(
+                "REQUIREMENT_EXTRACTOR_EFFORT must be one of "
+                "'low', 'medium', 'high', 'xhigh', 'max'"
+            )
+
+        if self.REQUIREMENT_EXTRACTION_MAX_PROVIDER_CALLS < 1:
+            raise ValueError(
+                "REQUIREMENT_EXTRACTION_MAX_PROVIDER_CALLS must be at least 1"
+            )
+
         return self
 
     @model_validator(mode="after")

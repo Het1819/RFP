@@ -176,7 +176,11 @@ class TestSqliteCheckConstraint:
         self, sqlite_db_path: Path
     ) -> None:
         url = f"sqlite:///{sqlite_db_path}"
-        result = _run_alembic("upgrade", "head", database_url=url)
+        # Target this migration's own revision, not "head". The fixture seeds
+        # only `documents`, so a later migration that legitimately touches any
+        # other table cannot run against it -- and this test is about A5c's
+        # columns and CHECK constraint, not about the whole chain.
+        result = _run_alembic("upgrade", _NEW_HEAD_REVISION, database_url=url)
         assert result.returncode == 0, result.stderr
 
         conn = sqlite3.connect(str(sqlite_db_path))
@@ -210,10 +214,10 @@ class TestSqliteCheckConstraint:
     def test_up_down_up_round_trips(self, sqlite_db_path: Path) -> None:
         url = f"sqlite:///{sqlite_db_path}"
 
-        up1 = _run_alembic("upgrade", "head", database_url=url)
+        up1 = _run_alembic("upgrade", _NEW_HEAD_REVISION, database_url=url)
         assert up1.returncode == 0, up1.stderr
 
-        down = _run_alembic("downgrade", "04ffd9fbcedb", database_url=url)
+        down = _run_alembic("downgrade", _OLD_HEAD_REVISION, database_url=url)
         assert down.returncode == 0, down.stderr
 
         conn = sqlite3.connect(str(sqlite_db_path))
@@ -245,7 +249,7 @@ class TestSqliteCheckConstraint:
         finally:
             conn.close()
 
-        up2 = _run_alembic("upgrade", "head", database_url=url)
+        up2 = _run_alembic("upgrade", _NEW_HEAD_REVISION, database_url=url)
         assert up2.returncode == 0, up2.stderr
 
         conn = sqlite3.connect(str(sqlite_db_path))
@@ -384,7 +388,11 @@ class TestPostgresCheckConstraint:
 
         self._seed_pre_a5c_postgres_schema()
 
-        up1 = _run_alembic("upgrade", "head", database_url=self.database_url)
+        # Scoped to this migration's revision for the same reason as the
+        # SQLite case above: the fixture schema contains only `documents`.
+        up1 = _run_alembic(
+            "upgrade", _NEW_HEAD_REVISION, database_url=self.database_url
+        )
         assert up1.returncode == 0, up1.stderr
 
         conn = psycopg.connect(
@@ -438,5 +446,7 @@ class TestPostgresCheckConstraint:
         down = _run_alembic("downgrade", "-1", database_url=self.database_url)
         assert down.returncode == 0, down.stderr
 
-        up2 = _run_alembic("upgrade", "head", database_url=self.database_url)
+        up2 = _run_alembic(
+            "upgrade", _NEW_HEAD_REVISION, database_url=self.database_url
+        )
         assert up2.returncode == 0, up2.stderr
