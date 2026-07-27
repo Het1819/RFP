@@ -224,6 +224,13 @@ def test_migration_upgrade_head_creates_expected_schema(pg_url):
         "accepted_candidate_count",
         "skipped_candidate_count",
         "validation_issue_counts",
+        # Pass 2B1 provider usage accounting.
+        "provider_call_count",
+        "input_tokens",
+        "output_tokens",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
+        "duration_ms",
     } <= run_cols
 
     engine.dispose()
