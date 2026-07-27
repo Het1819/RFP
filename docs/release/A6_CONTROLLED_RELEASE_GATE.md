@@ -6,9 +6,29 @@ This document defines the canonical release gate criteria, required evidence, ap
 
 ## 1. Immutable Release Source
 
-Every release candidate must originate strictly from `main` at an explicitly recorded, immutable git commit SHA.
+Every release candidate must originate strictly from `main` at one exact immutable commit SHA recorded during A6.3 packaging. Policy specification files must never hardcode the candidate SHA they govern.
 
-- **Target SHA**: `4cdee3ba27d853f4158b78f9a57ec4bfdc5b6d21` (`4cdee3b`)
+The A6.3 release-evidence record must contain:
+- repository name;
+- full candidate commit SHA;
+- main branch remote SHA at packaging time;
+- successful main CI run ID;
+- CI head SHA;
+- SBOM artifact run ID;
+- SBOM SHA-256 checksum;
+- SHA256SUMS SHA-256 checksum;
+- open pull-request count;
+- validation timestamp in UTC;
+- packaging approval state;
+- sign-off identities when actually provided.
+
+Required equality:
+```text
+recorded candidate SHA == origin/main SHA == successful main CI head SHA == release target SHA
+```
+
+Any commit to `main` after evidence collection invalidates the evidence package; evidence must be regenerated against the new `main` SHA. The evidence package remains outside the repository unless separately approved.
+
 - **Working Tree**: Clean (`git status --porcelain=v1` must return zero output)
 - **Open Pull Requests**: Exactly 0 open PRs
 - **Integrated CI Status**: All seven GitHub Actions checks passed at the candidate SHA (`ai-evals`, `backend-quality`, `docker-build`, `edge-security`, `frontend-quality`, `release-gate`, `security-scan`)
@@ -53,12 +73,19 @@ The release gate recognizes four distinct, non-overlapping approval states:
 3. **`RELEASE CANDIDATE APPROVED FOR PACKAGING`**: Release candidate signed off by Engineering, Security, and Product leads for asset generation.
 4. **`PRODUCTION DEPLOYMENT AUTHORIZED`**: Separate decision requiring explicit written deployment authorization, rollback plan, and designated operator.
 
+**Approval Precision Rules:**
+- Successful testing does not itself constitute Engineering, Security, or Product sign-off; sign-off fields may remain `PENDING`.
+- Do not invent organizational roles or approver identities.
+- Packaging preparation may occur before formal sign-off.
+- Creating the draft prerelease requires separate explicit authorization.
+- Production deployment requires another separate written authorization.
+
 ---
 
 ## 5. Automatic Stop Conditions
 
 Any of the following conditions immediately halts packaging or release:
-- SHA drift from target `4cdee3b`.
+- SHA drift from the candidate SHA recorded in the reviewed A6.3 evidence package.
 - Stale or failing GitHub CI check runs.
 - Unresolved high or critical security vulnerability in dependencies or containers.
 - Missing SBOM or SHA-256 asset checksums.

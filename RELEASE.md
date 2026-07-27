@@ -47,11 +47,12 @@ For full release gate specifications, approval states, and stop conditions, refe
 - **Operational Risk Control**: Do **not** push `pilot-hardening-step*` tags to `main` for Option A releases to prevent unintended automated asset publishing.
 
 #### Path B: Controlled Option A Release-Candidate Path
-- **Source**: `main` at exact immutable commit `4cdee3ba27d853f4158b78f9a57ec4bfdc5b6d21`.
+- **Source**: `main` at the exact candidate SHA recorded in the reviewed A6.3 evidence package.
 - **Pre-conditions**: Clean working tree, 0 open PRs, full regression (`make check`) passing, 7-service Docker topology verified.
 - **Release Assets**: Verified `sbom.json` and `SHA256SUMS` manifest.
 - **Release Settings**: Published strictly as **Draft** and **Pre-release** (not latest).
 - **Deployment Separation**: Creating a release candidate packaging asset DOES NOT perform VPS or production deployment. Formal deployment requires separate written authorization.
+
 
 ---
 

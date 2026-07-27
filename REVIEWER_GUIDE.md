@@ -1,6 +1,7 @@
 # RFP Architect Option A - Reviewer Guide
 
-This guide assists engineering, security, and product reviewers in auditing the Option A release candidate on `main` (`4cdee3ba27d853f4158b78f9a57ec4bfdc5b6d21`).
+This guide assists engineering, security, and product reviewers in auditing the Option A release candidate on `main`.
+
 
 
 ---
