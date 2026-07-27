@@ -15,9 +15,17 @@ Deliberate constraints
   the requirement-candidates-v1 JSON schema, so malformed model prose cannot
   reach the validator. Prompt-only "please return JSON" instructions are not
   used.
-- **No temperature.** Current Claude models reject ``temperature`` /``top_p`` /
-  ``top_k`` with a 400. Conservatism is expressed with ``output_config.effort``
-  instead (see settings), which is the supported equivalent.
+- **No sampling parameters.** Current Claude models reject ``temperature`` /
+  ``top_p`` / ``top_k`` with a 400, so none are sent. Note what does *not*
+  follow from that: ``output_config.effort`` is **not** a determinism control
+  and is not a substitute for one. ``effort=low`` is a bounded cost and latency
+  control. Nothing here makes the model's output deterministic.
+
+  Correctness comes from two other places instead: strict structured output
+  constrains the *shape* of the response, and the downstream span, evidence,
+  and hash checks in ``candidate_extraction`` enforce *provenance*. A candidate
+  survives because its span verifies against the page, never because the
+  sampling was assumed to be stable.
 - **Bounded everything.** Output tokens, candidate count, request timeout, and
   retry count are all settings-driven ceilings.
 - **Retries only what is transient.** Timeouts, overload, and rate limits back
@@ -34,8 +42,6 @@ from typing import Any
 
 from app.core.config import settings
 from app.services.extraction_contract import (
-    MAX_REQUIREMENT_TEXT_LEN,
-    MAX_UNCERTAINTY_REASON_LEN,
     SCHEMA_VERSION,
     ExtractionRequest,
     ExtractionResponse,
@@ -61,6 +67,20 @@ PROVIDER_AUTH_FAILED = "PROVIDER_AUTH_FAILED"
 PROVIDER_RESPONSE_INCOMPLETE = "PROVIDER_RESPONSE_INCOMPLETE"
 PROVIDER_RESPONSE_INVALID = "PROVIDER_RESPONSE_INVALID"
 PROVIDER_OUTPUT_LIMIT = "PROVIDER_OUTPUT_LIMIT"
+# The request was refused because our output schema is outside the supported
+# structured-output subset. Distinct from PROVIDER_RESPONSE_INVALID, which
+# means the model's *response* was unusable: this one is our bug, is never
+# retryable, and points an operator at the schema rather than at the model.
+PROVIDER_SCHEMA_REJECTED = "PROVIDER_SCHEMA_REJECTED"
+
+# Markers that identify a 400 as a structured-output schema rejection rather
+# than some other bad request.
+_SCHEMA_REJECTION_MARKERS = (
+    "output_config",
+    "output_format",
+    "json_schema",
+    "schema",
+)
 
 _TRANSIENT_CODES = frozenset(
     {PROVIDER_TIMEOUT, PROVIDER_RATE_LIMITED, PROVIDER_OVERLOADED, PROVIDER_UNAVAILABLE}
@@ -83,66 +103,49 @@ class ProviderUsage:
     request_ids: list[str] = field(default_factory=list)
 
 
-def _response_json_schema() -> dict[str, Any]:
-    """Strict JSON schema pinned to requirement-candidates-v1.
+def _sanitized_provider_detail(err: Exception, limit: int = 300) -> str:
+    """A bounded, single-line operator diagnostic from a provider error.
 
-    Written out rather than derived from the Pydantic model so the cached
-    prefix stays byte-stable regardless of Pydantic's schema-generation
-    details. `additionalProperties: false` at both levels is what makes the
-    model unable to invent fields.
+    Schema-rejection errors name schema paths and keywords, which is exactly
+    what an operator needs. The text is still bounded and whitespace-collapsed
+    so a verbose or unexpectedly echoing provider message cannot dump request
+    content into the logs, and it is never surfaced to an end user.
     """
-    return {
-        "type": "object",
-        "properties": {
-            "schema_version": {"type": "string", "const": SCHEMA_VERSION},
-            "candidates": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "source_unit_sequence": {"type": "integer"},
-                        "span_start": {"type": "integer"},
-                        "span_end": {"type": "integer"},
-                        "requirement_text": {
-                            "type": "string",
-                            "maxLength": MAX_REQUIREMENT_TEXT_LEN,
-                        },
-                        "requirement_type": {
-                            "type": ["string", "null"],
-                            "enum": [
-                                "functional",
-                                "non_functional",
-                                "compliance",
-                                "security",
-                                "performance",
-                                "interface",
-                                "operational",
-                                "other",
-                                None,
-                            ],
-                        },
-                        "confidence": {"type": ["number", "null"]},
-                        "uncertainty_reason": {
-                            "type": ["string", "null"],
-                            "maxLength": MAX_UNCERTAINTY_REASON_LEN,
-                        },
-                    },
-                    "required": [
-                        "source_unit_sequence",
-                        "span_start",
-                        "span_end",
-                        "requirement_text",
-                        "requirement_type",
-                        "confidence",
-                        "uncertainty_reason",
-                    ],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        "required": ["schema_version", "candidates"],
-        "additionalProperties": False,
-    }
+    text = str(getattr(err, "message", "") or err)
+    collapsed = " ".join(text.split())
+    return collapsed[:limit]
+
+
+def _looks_like_schema_rejection(err: Exception) -> bool:
+    """True when a 400 is about our output schema rather than anything else."""
+    text = _sanitized_provider_detail(err, limit=1000).lower()
+    return any(marker in text for marker in _SCHEMA_REJECTION_MARKERS)
+
+
+def build_wire_schema() -> dict[str, Any]:
+    """The exact JSON schema the SDK sends for ``ExtractionResponse``.
+
+    Derived from the Pydantic contract via the SDK's own transform, so there
+    is exactly one authoritative domain schema and no hand-maintained copy to
+    drift away from it. Exposed for tests: they assert against the same bytes
+    the adapter puts on the wire, not against a re-derivation.
+
+    The wire schema contains only constraints supported by Anthropic structured
+    outputs. The complete Pydantic and provenance constraints are enforced
+    after parsing and before persistence.
+
+    Concretely, the transform drops what the API's schema subset rejects and
+    keeps the rest: ``maxLength`` becomes a description hint rather than a
+    constraint, and ``Optional[X]`` becomes ``anyOf: [{type: X}, {type: null}]``
+    rather than a ``type`` array. Both matter -- the first is rejected by the
+    API outright, and the second trips a known type-array defect in
+    anthropic-python 0.112.0. ``additionalProperties: false`` survives at every
+    object level, which is what keeps the model from inventing fields.
+    """
+    from anthropic.lib._parse._transform import transform_schema
+
+    raw = ExtractionResponse.model_json_schema()
+    return transform_schema(raw)
 
 
 class AnthropicRequirementExtractor(RequirementExtractor):
@@ -263,13 +266,10 @@ class AnthropicRequirementExtractor(RequirementExtractor):
             "messages": [
                 {"role": "user", "content": build_user_turn(request.source_units)}
             ],
-            "output_config": {
-                "effort": settings.REQUIREMENT_EXTRACTOR_EFFORT,
-                "format": {
-                    "type": "json_schema",
-                    "schema": _response_json_schema(),
-                },
-            },
+            # The SDK derives `output_config.format` from `output_format` and
+            # merges it into whatever is passed here, so effort survives.
+            "output_config": {"effort": settings.REQUIREMENT_EXTRACTOR_EFFORT},
+            "output_format": ExtractionResponse,
         }
         # `tools` is deliberately absent: no web search, no web fetch, no code
         # execution, no computer use. Do not add one without revisiting the
@@ -277,7 +277,12 @@ class AnthropicRequirementExtractor(RequirementExtractor):
 
         self.usage.provider_call_count += 1
         try:
-            message = client.messages.create(**params)
+            # messages.parse() rather than messages.create(): the SDK builds the
+            # wire schema from the Pydantic contract, stripping the keywords the
+            # structured-output subset rejects, and validates the response back
+            # against that same contract. One authoritative schema, no
+            # hand-maintained wire copy to drift.
+            message = client.messages.parse(**params)
         except anthropic.APITimeoutError as err:
             raise ExtractionError(
                 PROVIDER_TIMEOUT, "Provider request timed out"
@@ -306,6 +311,20 @@ class AnthropicRequirementExtractor(RequirementExtractor):
             if status >= 500:
                 raise ExtractionError(
                     PROVIDER_UNAVAILABLE, f"Provider returned status {status}"
+                ) from err
+            if status == 400 and _looks_like_schema_rejection(err):
+                # Distinct from a bad model *response*: the request itself was
+                # refused because our output schema is outside the supported
+                # subset. That is our defect, not the model's, and it is not
+                # retryable -- the same schema fails identically every time.
+                logger.error(
+                    "extraction.schema_rejected: status=%s detail=%s",
+                    status,
+                    _sanitized_provider_detail(err),
+                )
+                raise ExtractionError(
+                    PROVIDER_SCHEMA_REJECTED,
+                    "Provider rejected the structured-output schema",
                 ) from err
             raise ExtractionError(
                 PROVIDER_RESPONSE_INVALID, f"Provider rejected the request ({status})"
@@ -357,6 +376,16 @@ class AnthropicRequirementExtractor(RequirementExtractor):
                 f"Provider stopped unexpectedly ({stop_reason})",
             )
 
+        # messages.parse() has already validated the payload against the
+        # Pydantic contract and exposes the instance here.
+        parsed = getattr(message, "parsed_output", None)
+        if isinstance(parsed, ExtractionResponse):
+            return parsed
+
+        # Fall back to parsing the text block. This covers a transport that
+        # returns an unparsed message -- including every mocked transport in
+        # the test suite -- and keeps the strict contract as the last word
+        # regardless of how the response arrived.
         text = self._first_text_block(message)
         if text is None:
             raise ExtractionError(
@@ -373,9 +402,9 @@ class AnthropicRequirementExtractor(RequirementExtractor):
             ) from err
 
         try:
-            # Strict re-validation against the Pydantic contract. The schema
-            # already constrained generation; this is the belt to that braces,
-            # and it is what a mocked or future transport is held to as well.
+            # The wire schema constrains shape; this enforces the full
+            # application contract (lengths, bounds, enum membership) that the
+            # wire schema deliberately does not carry.
             return ExtractionResponse.model_validate(payload)
         except Exception as err:
             raise ExtractionError(

@@ -22,11 +22,12 @@ from app.services.anthropic_extractor import (
     PROVIDER_TIMEOUT,
     PROVIDER_UNAVAILABLE,
     AnthropicRequirementExtractor,
-    _response_json_schema,
+    build_wire_schema,
 )
 from app.services.extraction_contract import (
     SCHEMA_VERSION,
     ExtractionRequest,
+    ExtractionResponse,
     SourceUnit,
 )
 from app.services.extraction_prompt import (
@@ -101,16 +102,29 @@ class _Message:
 
 
 class _Messages:
+    """Stands in for client.messages, recording what the adapter sends.
+
+    The adapter calls .parse(); .create() is kept so a regression back to it
+    is caught by the assertion below rather than silently passing.
+    """
+
     def __init__(self, outcomes: list[Any]) -> None:
         self._outcomes = list(outcomes)
         self.calls: list[dict[str, Any]] = []
 
-    def create(self, **kwargs: Any) -> Any:
+    def parse(self, **kwargs: Any) -> Any:
         self.calls.append(kwargs)
         outcome = self._outcomes.pop(0) if self._outcomes else _Message()
         if isinstance(outcome, Exception):
             raise outcome
         return outcome
+
+    def create(self, **kwargs: Any) -> Any:
+        raise AssertionError(
+            "adapter must call messages.parse(), not messages.create() -- "
+            "create() bypasses the SDK schema transform and sends unsupported "
+            "keywords"
+        )
 
 
 class _Client:
@@ -243,14 +257,11 @@ def test_request_uses_strict_structured_output_and_no_tools():
     assert "tool_choice" not in params
     assert "mcp_servers" not in params
 
-    fmt = params["output_config"]["format"]
-    assert fmt["type"] == "json_schema"
-    assert fmt["schema"]["additionalProperties"] is False
-    assert (
-        fmt["schema"]["properties"]["candidates"]["items"]["additionalProperties"]
-        is False
-    )
-    assert fmt["schema"]["properties"]["schema_version"]["const"] == SCHEMA_VERSION
+    # The Pydantic contract is handed to the SDK, which derives the wire schema
+    # itself. No hand-built schema is passed, so there is nothing to drift.
+    assert params["output_format"] is ExtractionResponse
+    assert "format" not in params["output_config"]
+    assert params["output_config"]["effort"] == settings.REQUIREMENT_EXTRACTOR_EFFORT
 
 
 def test_request_sends_no_sampling_parameters():
@@ -595,6 +606,10 @@ def test_logs_contain_no_prompt_or_source_text(caplog, monkeypatch):
         assert SYSTEM_POLICY[:60] not in message
 
 
-def test_schema_helper_is_stable():
+def test_wire_schema_is_deterministic():
     """The cached prefix depends on this being byte-stable."""
-    assert _response_json_schema() == _response_json_schema()
+    import json
+
+    first = json.dumps(build_wire_schema(), sort_keys=True)
+    second = json.dumps(build_wire_schema(), sort_keys=True)
+    assert first == second

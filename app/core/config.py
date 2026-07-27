@@ -211,9 +211,11 @@ class Settings(BaseSettings):
     REQUIREMENT_EXTRACTOR_PROVIDER: str = "disabled"
     # Model, prompt version, and schema version come from trusted settings.
     REQUIREMENT_EXTRACTOR_MODEL: str = "claude-opus-5"
-    # `temperature` is rejected by current Claude models, so extraction
-    # conservatism is expressed through effort instead. "low" keeps the model
-    # close to the source text, which is what evidence-bound extraction wants.
+    # `temperature`/`top_p`/`top_k` are rejected by current Claude models, so
+    # none are sent. Effort is NOT a replacement for them: it is a bounded
+    # cost and latency control, not a determinism control. Response shape is
+    # constrained by strict structured output, and provenance is enforced by
+    # the downstream span/evidence/hash checks -- not by this setting.
     REQUIREMENT_EXTRACTOR_EFFORT: str = "low"
 
     # Hard input bounds. A document over either limit fails closed rather than
