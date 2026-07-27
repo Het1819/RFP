@@ -2,17 +2,16 @@
 
 This guide explains how to build, configure, run, and maintain the RFP Architect MVP in production or pilot environments.
 
-> **This system is NOT production-ready.** Phase A3 hardened secrets,
-> database/Redis authentication, LLM configuration, and storage
-> persistence. Phase A4 (this guide) adds a hardened Nginx TLS
-> reverse-proxy boundary in front of the app, with trusted-proxy-aware
-> client-IP resolution, security headers, an enforced Content Security
-> Policy, and edge request/rate limits. It does **not** add a publicly
-> trusted certificate (issuance/renewal were never performed), a trusted-
-> proxy allowlist beyond the single bundled Nginx, MFA/enterprise OIDC,
-> hostile-document isolation, or password recovery. Do not point real
-> customer or RFP data at a stack configured this way, and never expose it
-> beyond `127.0.0.1` for local validation.
+> **Deployment Prerequisites Notice:**
+> The RFP Architect Option A integrated release includes full backend security hardening:
+> Argon2 password authentication, server-side Redis sessions, login throttling, Nginx TLS 1.3
+> edge boundary, quarantine upload storage, ClamAV malware scanning, isolated containerized parser,
+> and governed requirement extraction.
+>
+> Prior to executing a live production deployment, the operator must provide production CA-signed TLS
+> certificates, production domain DNS bindings, operator-managed secret files, and designated rollback targets.
+> Any unresolved deployment value is marked as `REQUIRED BEFORE DEPLOYMENT`.
+
 
 ## Edge Architecture (Phase A4)
 
